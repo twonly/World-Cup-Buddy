@@ -1,0 +1,68 @@
+{
+  "name": "worldcup-buddy",
+  "version": "1.0.0",
+  "description": "世界杯 Buddy — desktop FIFA World Cup 2026 companion for match day",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:vite\" \"npm:dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && tsc -p electron && cross-env NODE_ENV=development electron .",
+    "build": "tsc -p electron && vite build",
+    "package:mac": "npm run build && electron-builder --mac",
+    "package:win": "npm run build && electron-builder --win",
+    "package:all": "npm run build && electron-builder --mac --win"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3",
+    "typescript": "^5.3.3",
+    "vite": "^5.1.0",
+    "wait-on": "^7.2.0"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.5.0"
+  },
+  "build": {
+    "afterPack": "scripts/afterPackAdhocSign.cjs",
+    "appId": "com.worldcupbuddy.app",
+    "productName": "World Cup Buddy",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "public/**/*",
+      "character-packs/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.entertainment",
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] }
+      ],
+      "artifactName": "WorldCup-Buddy-${version}-mac-${arch}.${ext}"
+    },
+    "win": {
+      "target": [
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "artifactName": "WorldCup-Buddy-${version}-win-${arch}.${ext}"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "twonly",
+        "repo": "World-Cup-Buddy"
+      }
+    ]
+  }
+}

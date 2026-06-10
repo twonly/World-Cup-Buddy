@@ -1,0 +1,28 @@
+import { contextBridge, ipcRenderer } from 'electron';
+
+export type Mood = 'idle' | 'watch' | 'cheer' | 'sad' | 'flag' | 'sleep' | 'dance';
+export type ShrimpEvent =
+  | { kind: 'mood'; mood: Mood }
+  | { kind: 'pack'; pack: any };
+
+contextBridge.exposeInMainWorld('shrimpAPI', {
+  getConfig: () => ipcRenderer.invoke('config:get'),
+  setConfig: (cfg: any) => ipcRenderer.invoke('config:set', cfg),
+  listTeams: () => ipcRenderer.invoke('teams:list'),
+  drag: (dx: number, dy: number) => ipcRenderer.invoke('shrimp:drag', dx, dy),
+  click: () => ipcRenderer.invoke('shrimp:click'),
+  triggerDemo: () => ipcRenderer.invoke('demo:trigger'),
+  openSettings: () => ipcRenderer.invoke('settings:open'),
+  saveCard: () => ipcRenderer.invoke('card:save'),
+  listCharacters: () => ipcRenderer.invoke('characters:list'),
+  openCharactersFolder: () => ipcRenderer.invoke('characters:openFolder'),
+  getCharacter: (id: string) => ipcRenderer.invoke('characters:get', id),
+  importFlags: () => ipcRenderer.invoke('characters:importFlags'),
+  contextMenu: () => ipcRenderer.invoke('shrimp:contextMenu'),
+  farewell: () => ipcRenderer.invoke('shrimp:farewell'),
+  onEvent: (cb: (ev: ShrimpEvent) => void) => {
+    const listener = (_: any, ev: ShrimpEvent) => cb(ev);
+    ipcRenderer.on('shrimp-event', listener);
+    return () => ipcRenderer.removeListener('shrimp-event', listener);
+  },
+});
