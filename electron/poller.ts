@@ -255,13 +255,15 @@ export async function fetchInfoBite(): Promise<GameEvent | null> {
       }
     }
 
-    // News headline
+    // News headline — bubble auto-grows now, so keep the full title
+    // (cap only against pathological lengths)
     const articles = json?.news?.articles ?? [];
     if (articles.length > 0) {
+      const headline: string = articles[0]?.headline ?? '';
       options.push({
         mood: 'watch',
-        message: `📰 ${(articles[0]?.headline ?? '').slice(0, 50)}`,
-        ttl: 7000,
+        message: `📰 ${headline.length > 160 ? headline.slice(0, 157) + '…' : headline}`,
+        ttl: 8000,
       });
     }
 

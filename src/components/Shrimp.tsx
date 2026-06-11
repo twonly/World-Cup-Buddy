@@ -125,6 +125,8 @@ function Sparkline({ data }: { data: number[] }) {
 
 export function Shrimp() {
   const [mood, setMood] = useState<Mood>('idle');
+  const [poked, setPoked] = useState(false);
+  const pokeTimer = useRef<number | null>(null);
   const [pack, setPack] = useState<Pack | null>(null);
   const [revertTimer, setRevertTimer] = useState<number | null>(null);
   const [score, setScore] = useState<ScoreState | null>(null);
@@ -191,7 +193,16 @@ export function Shrimp() {
   }, []);
 
   const clickTimer = useRef<number | null>(null);
+  // Instant tactile feedback on every click — even ones the main process
+  // debounces away — so the buddy never feels unresponsive.
+  const poke = () => {
+    if (pokeTimer.current) window.clearTimeout(pokeTimer.current);
+    setPoked(false);
+    requestAnimationFrame(() => setPoked(true)); // restart the animation
+    pokeTimer.current = window.setTimeout(() => setPoked(false), 550);
+  };
   const onClick = () => {
+    poke();
     if (clickTimer.current) return;
     clickTimer.current = window.setTimeout(() => {
       clickTimer.current = null;
@@ -226,7 +237,7 @@ export function Shrimp() {
 
   return (
     <div
-      className={`shrimp-stage mood-${mood} ${isCustom ? 'custom' : ''}`}
+      className={`shrimp-stage mood-${mood} ${isCustom ? 'custom' : ''} ${poked ? 'poked' : ''}`}
       onMouseDown={onMouseDown}
       onClick={onClick}
       onDoubleClick={onDoubleClick}

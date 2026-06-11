@@ -26,3 +26,11 @@ contextBridge.exposeInMainWorld('shrimpAPI', {
     return () => ipcRenderer.removeListener('shrimp-event', listener);
   },
 });
+
+// Bubble window controls (pin = cancel auto-close, user closes manually)
+contextBridge.exposeInMainWorld('bubbleAPI', {
+  pin: () => ipcRenderer.invoke('bubble:pin'),
+  close: () => ipcRenderer.invoke('bubble:close'),
+  drag: (dx: number, dy: number) => ipcRenderer.invoke('bubble:drag', dx, dy),
+  resize: (contentH: number) => ipcRenderer.invoke('bubble:resize', contentH),
+});

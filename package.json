@@ -1,6 +1,6 @@
 {
   "name": "worldcup-buddy",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "世界杯 Buddy — desktop FIFA World Cup 2026 companion for match day",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -46,6 +46,7 @@
     ],
     "mac": {
       "category": "public.app-category.entertainment",
+      "icon": "build/icon.icns",
       "target": [
         { "target": "dmg", "arch": ["arm64"] }
       ],

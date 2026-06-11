@@ -38,6 +38,19 @@ html, body, #root {
   transition: filter 0.3s ease;
 }
 
+/* click feedback: quick wobble on the body wrapper so it stacks cleanly
+   with whatever mood animation is running on .shrimp-img */
+.shrimp-stage.poked .shrimp-body {
+  animation: shrimp-poke 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+@keyframes shrimp-poke {
+  0%   { transform: scale(1) rotate(0deg); }
+  20%  { transform: scale(0.92) rotate(-6deg); }
+  45%  { transform: scale(1.06) rotate(5deg); }
+  70%  { transform: scale(0.98) rotate(-3deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+
 .shrimp-emoji {
   font-size: 110px;
   line-height: 1;
@@ -254,8 +267,9 @@ html, body, #root {
 }
 
 @keyframes shrimp-sleep {
-  0%, 100% { transform: rotate(-90deg) translateY(20px) scale(0.9); }
-  50%      { transform: rotate(-92deg) translateY(22px) scale(0.9); }
+  /* upright like every other mood — just a slow sleepy breathing bob */
+  0%, 100% { transform: translateY(2px) scale(0.98); }
+  50%      { transform: translateY(5px) scale(0.97); }
 }
 
 @keyframes shrimp-dance {
@@ -308,7 +322,7 @@ html, body, #root {
   display: flex;
   align-items: flex-start;
   justify-content: flex-end;
-  padding: 12px 12px 0 12px;
+  padding: 12px 12px 14px 12px; /* bottom clearance keeps the tail visible */
   opacity: 0;
   transform: translateY(8px) scale(0.96);
   transition: all 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -320,7 +334,7 @@ html, body, #root {
   background: linear-gradient(135deg, #fff5e6 0%, #ffe2c4 100%);
   border: 2px solid #ff8b3d;
   border-radius: 18px;
-  padding: 14px 16px;
+  padding: 14px 30px 14px 16px; /* extra right padding clears the ✕ */
   max-width: 100%;
   box-shadow: 0 8px 24px rgba(255, 100, 50, 0.25);
   color: #3a1f0a;
@@ -328,7 +342,43 @@ html, body, #root {
   line-height: 1.5;
   font-weight: 500;
   animation: bubble-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
 }
+.bubble:active { cursor: grabbing; }
+.bubble.pinned { box-shadow: 0 8px 28px rgba(255, 100, 50, 0.4); }
+
+.bubble-text {
+  /* long headlines (e.g. "Scotland at the 2026 World Cup...") wrap, never clip */
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.bubble-close {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(58, 31, 10, 0.12);
+  color: #3a1f0a;
+  font-size: 11px;
+  line-height: 20px;
+  text-align: center;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.bubble:hover .bubble-close,
+.bubble.pinned .bubble-close { opacity: 1; }
+.bubble-close:hover { background: rgba(58, 31, 10, 0.28); }
+.bubble.mood-sad .bubble-close { color: #1f3457; background: rgba(31, 52, 87, 0.12); }
+.bubble.mood-sad .bubble-close:hover { background: rgba(31, 52, 87, 0.28); }
 
 .bubble.mood-cheer, .bubble.mood-dance {
   background: linear-gradient(135deg, #fff0d4 0%, #ffd166 100%);

@@ -193,6 +193,9 @@ function createSettingsWindow() {
   });
 }
 
+// Auto-close timers per bubble window; cleared when the user pins a bubble.
+const bubbleTimers = new Map<number, NodeJS.Timeout>();
+
 function showBubble(message: string, mood: string, ttl = 5000) {
   if (!shrimpWindow) return;
   const [sx, sy] = shrimpWindow.getPosition();
@@ -207,8 +210,8 @@ function showBubble(message: string, mood: string, ttl = 5000) {
     resizable: false,
     hasShadow: false,
     skipTaskbar: true,
-    focusable: false,
-    acceptFirstMouse: false,
+    focusable: false, // never steal focus from the user's work
+    acceptFirstMouse: true, // but interactive: drag / pin / close
     type: process.platform === 'darwin' ? 'panel' : undefined,
     show: false,
     webPreferences: {
@@ -218,7 +221,6 @@ function showBubble(message: string, mood: string, ttl = 5000) {
     },
   });
   bubble.setAlwaysOnTop(true, 'screen-saver');
-  bubble.setIgnoreMouseEvents(true); // click-through; never block what's underneath
 
   const encoded = encodeURIComponent(JSON.stringify({ message, mood }));
   if (isDev) {
@@ -228,9 +230,46 @@ function showBubble(message: string, mood: string, ttl = 5000) {
   }
   bubble.once('ready-to-show', () => bubble.showInactive());
 
-  setTimeout(() => {
+  const id = bubble.webContents.id;
+  const timer = setTimeout(() => {
+    bubbleTimers.delete(id);
     if (!bubble.isDestroyed()) bubble.close();
   }, ttl);
+  bubbleTimers.set(id, timer);
+  bubble.on('closed', () => {
+    const t = bubbleTimers.get(id);
+    if (t) clearTimeout(t);
+    bubbleTimers.delete(id);
+  });
+}
+
+// Bubble interactions: any click pins it (cancels auto-close); ✕ closes it;
+// dragging moves it; renderer reports its content height so long text fits.
+function setupBubbleIpc() {
+  ipcMain.handle('bubble:pin', (e) => {
+    const t = bubbleTimers.get(e.sender.id);
+    if (t) { clearTimeout(t); bubbleTimers.delete(e.sender.id); }
+  });
+  ipcMain.handle('bubble:close', (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (win && !win.isDestroyed()) win.close();
+  });
+  ipcMain.handle('bubble:drag', (e, dx: number, dy: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || win.isDestroyed()) return;
+    const [x, y] = win.getPosition();
+    win.setPosition(x + Math.round(dx), y + Math.round(dy));
+  });
+  ipcMain.handle('bubble:resize', (e, contentH: number) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win || win.isDestroyed()) return;
+    const [x, y] = win.getPosition();
+    const [w, h] = win.getSize();
+    const newH = Math.min(Math.max(Math.ceil(contentH), 80), 480);
+    if (newH === h) return;
+    // Keep the bottom edge (speech tail near the buddy) anchored
+    win.setBounds({ x, y: y + (h - newH), width: w, height: newH });
+  });
 }
 
 function setupAutoUpdater() {
@@ -290,7 +329,7 @@ function rebuildTrayMenu() {
     { label: '🙈 显示/隐藏虾仔（⌘⇧X）', click: () => toggleShrimp() },
     { label: '⚙️ 设置', click: () => createSettingsWindow() },
     { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },
-    { label: '🔁 戳一下虾仔', click: () => triggerDemoEvent() },
+    { label: '⚽ 看看赛况', click: () => { showMatchInfo().catch(() => {}); } },
     { label: '🔄 检查更新', click: () => manualCheckForUpdates() },
     { type: 'separator' },
     { label: '🦐💔 含泪告别（退出）', click: () => app.quit() },
@@ -328,62 +367,65 @@ function hideShrimpWithTip() {
   }, 1500);
 }
 
-// Companion chitchat — never fakes a game result. Pure emotional value + small talk.
-// Each line pairs a mood with a tone-matching message.
-const CHITCHAT: { mood: string; message: string }[] = [
-  // idle — chill 摸鱼
-  { mood: 'idle', message: '🦐 摸鱼是基本权利,别太卷' },
-  { mood: 'idle', message: '🦐 虾仔在角落安静地陪你' },
-  { mood: 'idle', message: '🍃 偶尔走神也没关系' },
-  { mood: 'idle', message: '☕ 喝口水再继续吧' },
-  { mood: 'idle', message: '🪟 看看窗外,世界很大' },
-  { mood: 'idle', message: '🦐 戳虾仔会变快乐(也许)' },
-
-  // watch — 关心你的状态
-  { mood: 'watch', message: '👀 虾仔在偷偷盯着你工作哦' },
-  { mood: 'watch', message: '🔍 写代码呢? 虾仔虽然看不懂但很佩服' },
-  { mood: 'watch', message: '📖 虾仔陪读模式 on' },
-  { mood: 'watch', message: '⌨️ 噼里啪啦,键盘的声音真好听' },
-  { mood: 'watch', message: '🧠 这道题难住你了? 站起来走两步' },
-
-  // cheer — 给你打气
-  { mood: 'cheer', message: '💪 你今天已经很棒了!' },
-  { mood: 'cheer', message: '🌟 又解决一个 bug? 虾仔为你欢呼!' },
-  { mood: 'cheer', message: '🎉 一个小进展也值得开心~' },
-  { mood: 'cheer', message: '💯 工作做得不错,虾仔点赞' },
-  { mood: 'cheer', message: '🥳 加油! 虾仔在身后撑你' },
-  { mood: 'cheer', message: '✨ 你比昨天的自己更厉害一点点' },
-
-  // sad — 共情陪伴
-  { mood: 'sad', message: '🥺 累了就歇会儿,没关系的' },
-  { mood: 'sad', message: '🫂 虾仔抱抱你' },
-  { mood: 'sad', message: '🌧️ 不开心的时候,深呼吸一下' },
-  { mood: 'sad', message: '🦐 烦躁就戳戳虾仔出气也行' },
-
-  // flag — 期待 / 仪式感
-  { mood: 'flag', message: '🚩 周末快来吧! 虾仔想躺平' },
-  { mood: 'flag', message: '🎯 今天的目标: 把工作做到自己满意' },
-  { mood: 'flag', message: '⚽ 等会儿要不要看球休息一下?' },
-  { mood: 'flag', message: '📅 今天也是值得纪念的一天' },
-
-  // sleep — 关心健康
-  { mood: 'sleep', message: '💤 虾仔有点困了... 你也困吧?' },
-  { mood: 'sleep', message: '🛌 别熬夜了,睡觉是正经事' },
-  { mood: 'sleep', message: '😴 再坚持下,马上下班' },
-  { mood: 'sleep', message: '🌙 困了就趴一会儿,不丢人' },
-
-  // dance — 俏皮
-  { mood: 'dance', message: '🎵 摸鱼专属 BGM 已开启' },
-  { mood: 'dance', message: '💃 虾仔在偷偷跳舞,别看!' },
-  { mood: 'dance', message: '🎉 庆祝今天还活着,先蹦个迪' },
-  { mood: 'dance', message: '🦐 我跳的不是舞,是寂寞' },
-  { mood: 'dance', message: '🌈 心情不好就摇起来,虾仔陪你' },
+// Football-only fallbacks for when a click finds nothing new from the API.
+// Kept deliberately plain — no work/rest small talk.
+const NO_NEWS_TIPS: { mood: string; message: string }[] = [
+  { mood: 'watch', message: '⚽ 暂时没有新资讯,虾仔继续盯着赛场' },
+  { mood: 'idle', message: '🥅 场上暂时风平浪静,有动静马上喊你' },
+  { mood: 'watch', message: '📡 刚刷新过了,还没有新的比赛动态' },
 ];
 
-function triggerDemoEvent() {
-  const pick = CHITCHAT[Math.floor(Math.random() * CHITCHAT.length)];
-  emitToShrimp({ kind: 'mood', mood: pick.mood as any });
-  showBubble(pick.message, pick.mood);
+// Instant acknowledgement while the lookup runs — varied so it never feels canned.
+const SEARCHING_TIPS: string[] = [
+  '📡 正在连线赛场,稍等…',
+  '🔭 望远镜对准球门,马上来…',
+  '🏃 虾仔跑去问边裁了,稍等…',
+  '🎙️ 正在连线解说席…',
+  '🛰️ 卫星对准球场,信号马上回来…',
+  '⏱️ 刷新比分中,等我两秒…',
+  '📋 翻一下技术统计,很快…',
+];
+let lastSearchingTip = -1;
+function pickSearchingTip(): string {
+  // never repeat the previous one back-to-back
+  let i = Math.floor(Math.random() * SEARCHING_TIPS.length);
+  if (i === lastSearchingTip) i = (i + 1) % SEARCHING_TIPS.length;
+  lastSearchingTip = i;
+  return SEARCHING_TIPS[i];
+}
+
+let infoBiteBusy = false;
+let lastInfoDoneAt = 0;
+const INFO_COOLDOWN_MS = 1500; // rapid re-clicks right after a result: wiggle only
+
+// Click / "看看赛况": refresh ESPN, then surface a real event or an info bite.
+// Nothing from the API → one plain football tip. Never generic chitchat.
+// Anti-spam: one in-flight lookup at a time + a short cooldown after each result,
+// so hammering the buddy fires at most 1-2 requests.
+async function showMatchInfo() {
+  if (infoBiteBusy || Date.now() - lastInfoDoneAt < INFO_COOLDOWN_MS) return;
+  infoBiteBusy = true;
+  const clickAt = Date.now();
+  emitToShrimp({ kind: 'mood', mood: 'watch' });
+  showBubble(pickSearchingTip(), 'watch', 2600); // gone right before the result lands
+  forceTick(); // real scoring/status events fire via onGameEvent
+
+  // Give forceTick a beat so a real event (if any) takes priority.
+  setTimeout(async () => {
+    try {
+      if (getLastRealEventAt() > clickAt) return; // real event already bubbled
+      const bite = await fetchInfoBite();
+      if (bite) {
+        showBubble(bite.message, bite.mood, bite.ttl ?? 6000);
+      } else {
+        const tip = NO_NEWS_TIPS[Math.floor(Math.random() * NO_NEWS_TIPS.length)];
+        showBubble(tip.message, tip.mood, 4500);
+      }
+    } finally {
+      infoBiteBusy = false;
+      lastInfoDoneAt = Date.now();
+    }
+  }, 2800);
 }
 
 function emitToShrimp(payload: any) {
@@ -500,6 +542,7 @@ app.whenReady().then(() => {
   createShrimpWindow();
   buildTray();
   setupAutoUpdater();
+  setupBubbleIpc();
 
   // Global hotkey: summon / hide the shrimp from anywhere (fallback when tray is invisible)
   const registered = globalShortcut.register(HOTKEY, () => toggleShrimp());
@@ -539,20 +582,8 @@ app.whenReady().then(() => {
     const [x, y] = shrimpWindow.getPosition();
     shrimpWindow.setPosition(x + dx, y + dy);
   });
-  ipcMain.handle('shrimp:click', async () => {
-    triggerDemoEvent();   // instant chitchat so click feels responsive
-    const clickAt = Date.now();
-    forceTick();          // refresh ESPN; new scoring/status events fire via onGameEvent
-
-    // Wait briefly so a real event from forceTick (if any) takes priority.
-    // If nothing real surfaced, pull an info bite (leaders/venue/news/win prob).
-    setTimeout(async () => {
-      if (getLastRealEventAt() > clickAt) return; // a real event already showed up
-      const bite = await fetchInfoBite();
-      if (bite) showBubble(bite.message, bite.mood, bite.ttl ?? 6000);
-    }, 2800);
-  });
-  ipcMain.handle('demo:trigger', () => triggerDemoEvent());
+  ipcMain.handle('shrimp:click', () => showMatchInfo());
+  ipcMain.handle('demo:trigger', () => showMatchInfo());
   ipcMain.handle('settings:open', () => createSettingsWindow());
   ipcMain.handle('card:save', () => saveDailyCard());
   ipcMain.handle('shrimp:contextMenu', () => {
@@ -561,7 +592,7 @@ app.whenReady().then(() => {
       { type: 'separator' },
       { label: '⚙️ 设置', click: () => createSettingsWindow() },
       { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },
-      { label: '🔁 戳一下虾仔', click: () => triggerDemoEvent() },
+      { label: '⚽ 看看赛况', click: () => { showMatchInfo().catch(() => {}); } },
       { label: '🙈 藏起来一会儿（⌘⇧X 召回）', click: () => hideShrimpWithTip() },
       { type: 'separator' },
       { label: '🦐💔 含泪告别（退出）', click: () => app.quit() },

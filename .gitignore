@@ -7,3 +7,9 @@ release/
 .vscode/
 .idea/
 *.tsbuildinfo
+
+# local ops artifacts — machine-specific paths, never publish
+REPORT-*.md
+tools/
+test/matchday-smoke-cron.sh
+tmp/
