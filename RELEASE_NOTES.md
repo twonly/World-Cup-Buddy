@@ -1,4 +1,4 @@
-# World Cup Buddy v1.2.0
+# World Cup Buddy v1.2.1
 
 ## macOS 下载后打不开?
 

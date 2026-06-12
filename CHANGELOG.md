@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.2.1 - 2026-06-12
+
+- 补充 macOS Gatekeeper 下载说明,明确给出 `xattr -dr com.apple.quarantine "/Applications/World Cup Buddy.app"`。
+- 新增 `RELEASE_NOTES.md`,后续 GitHub Release 下载页会自动显示 macOS/Windows 打开说明。
+
 ## v1.2.0 - 2026-06-12
 
 - 扩展 ESPN 现场动态: 合并 `keyEvents` 和 `commentary.play`, 支持射门、射正、封堵、角球、犯规、手球、越位、换人、暂停/恢复等解说型气泡。
