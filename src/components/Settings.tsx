@@ -13,7 +13,14 @@ export function Settings() {
   const [characterPack, setCharacterPack] = useState<string>('default-shrimp');
   const [quietMode, setQuietMode] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
-  const [showWinProb, setShowWinProb] = useState(true);
+  const [showPossession, setShowPossession] = useState(true);
+  // Proxy settings
+  const [proxyMode, setProxyMode] = useState<'direct' | 'system' | 'custom'>('direct');
+  const [proxyUrl, setProxyUrl] = useState<string>('');
+  const [proxyBypass, setProxyBypass] = useState<string>('<local>');
+  const [proxyTestResult, setProxyTestResult] = useState<string>('');
+  const [proxyTestOk, setProxyTestOk] = useState<boolean | null>(null);
+  const [proxyTesting, setProxyTesting] = useState(false);
 
   useEffect(() => {
     const api = (window as any).shrimpAPI;
@@ -28,7 +35,10 @@ export function Settings() {
       setCharacterPack(cfg.characterPack ?? 'default-shrimp');
       setQuietMode(!!cfg.quietMode);
       setSoundEnabled(!!cfg.soundEnabled);
-      setShowWinProb(cfg.showWinProb !== false);
+      setShowPossession(cfg.showPossession ?? cfg.showWinProb !== false);
+      setProxyMode(cfg.proxyMode ?? 'direct');
+      setProxyUrl(cfg.proxyUrl ?? '');
+      setProxyBypass(cfg.proxyBypass ?? '<local>');
       setTeams(ts);
       setPacks(ps);
     })();
@@ -47,9 +57,38 @@ export function Settings() {
 
   const save = async () => {
     const api = (window as any).shrimpAPI;
-    await api.setConfig({ favoriteTeams: favorites, mode, characterPack, quietMode, soundEnabled, showWinProb });
+    await api.setConfig({
+      favoriteTeams: favorites, mode, characterPack, quietMode, soundEnabled, showPossession,
+      proxyMode, proxyUrl, proxyBypass,
+    });
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
+  };
+
+  const testProxy = async () => {
+    const api = (window as any).shrimpAPI;
+    if (proxyMode === 'custom' && !proxyUrl.trim()) {
+      setProxyTestOk(false);
+      setProxyTestResult('❌ 请先填写自定义代理地址');
+      return;
+    }
+    setProxyTesting(true);
+    setProxyTestResult('');
+    setProxyTestOk(null);
+    try {
+      const result = await api.testProxy(
+        proxyMode,
+        proxyMode === 'custom' ? proxyUrl : undefined,
+        proxyMode === 'custom' ? proxyBypass : undefined,
+      );
+      setProxyTestOk(result.ok);
+      setProxyTestResult(result.message);
+    } catch (err: any) {
+      setProxyTestOk(false);
+      setProxyTestResult(`❌ 测试失败: ${err.message || String(err)}`);
+    } finally {
+      setProxyTesting(false);
+    }
   };
 
   const filtered = teams.filter(t =>
@@ -113,9 +152,75 @@ export function Settings() {
               onChange={() => setMode('live')}
             />
             Live <span className="badge">推荐</span>
-            <small>ESPN 实时拉取,20s 一刷,进球/红黄牌/点球自动推送</small>
+            <small>ESPN 实时拉取,20s 一刷,进球/射门/角球/红黄牌自动推送</small>
           </label>
         </div>
+      </section>
+
+      <section className="section">
+        <h2>🌐 网络代理</h2>
+        <div className="proxy-row">
+          <label>
+            <input
+              type="radio" name="proxy"
+              checked={proxyMode === 'direct'}
+              onChange={() => setProxyMode('direct')}
+            />
+            直连
+            <small>不使用代理,直接联网</small>
+          </label>
+          <label>
+            <input
+              type="radio" name="proxy"
+              checked={proxyMode === 'system'}
+              onChange={() => setProxyMode('system')}
+            />
+            系统代理
+            <small>使用操作系统代理配置</small>
+          </label>
+          <label>
+            <input
+              type="radio" name="proxy"
+              checked={proxyMode === 'custom'}
+              onChange={() => setProxyMode('custom')}
+            />
+            自定义
+            <small>手动输入代理服务器地址</small>
+          </label>
+        </div>
+        {proxyMode === 'custom' && (
+          <div className="proxy-fields">
+            <input
+              type="text"
+              placeholder="代理地址,如 http://proxy.corp.com:8080 或 http://user:pass@proxy:port"
+              value={proxyUrl}
+              onChange={e => setProxyUrl(e.target.value)}
+            />
+            <input
+              type="text"
+              placeholder="绕过代理的域名(可选),如 <local>,*.corp.com"
+              value={proxyBypass}
+              onChange={e => setProxyBypass(e.target.value)}
+            />
+          </div>
+        )}
+        <div className="proxy-test-row">
+          <button className="proxy-test-btn" onClick={testProxy} disabled={proxyTesting}>
+            {proxyTesting ? '🔄 测试中...' : '🧪 测试连通性'}
+          </button>
+          {proxyTestResult && (
+            <span className={`proxy-test-result ${proxyTestOk === true ? 'success' : proxyTestOk === false ? 'fail' : ''}`}>
+              {proxyTestResult}
+            </span>
+          )}
+        </div>
+        <p className="proxy-hint">
+          {proxyMode === 'system'
+            ? '💡 系统代理会使用当前操作系统的代理配置。公司内网若有统一代理,通常选这个即可。'
+            : proxyMode === 'custom'
+            ? '💡 支持 HTTP 和 HTTPS 代理。格式: http://host:port 或 http://user:password@host:port'
+            : '💡 公司内网无法访问 ESPN API 时,请切换到系统代理或自定义代理。'}
+        </p>
       </section>
 
       <section className="section">
@@ -130,6 +235,11 @@ export function Settings() {
             <input type="checkbox" checked={soundEnabled} onChange={e => setSoundEnabled(e.target.checked)} />
             <span>🔊 声音提示</span>
             <small>进球/红牌/终场 8-bit 音效</small>
+          </label>
+          <label className="toggle">
+            <input type="checkbox" checked={showPossession} onChange={e => setShowPossession(e.target.checked)} />
+            <span>📈 控球曲线</span>
+            <small>Live 模式下展示 ESPN possessionPct 的实时走势</small>
           </label>
         </div>
       </section>

@@ -39,6 +39,12 @@ type ScoreState = {
   isPenalties?: boolean;
   groupName?: string;
   roundName?: string;
+  myPossessionPct?: number;
+  oppPossessionPct?: number;
+  myShots?: number;
+  oppShots?: number;
+  myShotsOnTarget?: number;
+  oppShotsOnTarget?: number;
 };
 
 function statusBadge(s: ScoreState, now: number): string {
@@ -105,20 +111,20 @@ function playMoodSound(mood: Mood) {
 }
 
 // Sparkline as inline SVG path. data: array of 0..1 values.
-function Sparkline({ data }: { data: number[] }) {
+function PossessionSparkline({ data, pct }: { data: number[]; pct?: number }) {
   if (!data.length) return null;
   const w = 86, h = 16;
   const stepX = w / Math.max(1, data.length - 1);
   const pts = data.map((v, i) => `${(i * stepX).toFixed(1)},${((1 - v) * (h - 2) + 1).toFixed(1)}`).join(' ');
   const lastY = (1 - data[data.length - 1]) * (h - 2) + 1;
-  const lastPct = Math.round(data[data.length - 1] * 100);
+  const lastPct = Math.round(pct ?? data[data.length - 1] * 100);
   return (
-    <div className="winprob">
+    <div className="possession">
       <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
         <polyline points={pts} fill="none" stroke="#fde047" strokeWidth="1.5" strokeLinejoin="round" />
         <circle cx={(data.length - 1) * stepX} cy={lastY} r="2" fill="#fde047" />
       </svg>
-      <span className="winprob-pct">{lastPct}%</span>
+      <span className="possession-pct">控球 {lastPct}%</span>
     </div>
   );
 }
@@ -130,8 +136,8 @@ export function Shrimp() {
   const [pack, setPack] = useState<Pack | null>(null);
   const [revertTimer, setRevertTimer] = useState<number | null>(null);
   const [score, setScore] = useState<ScoreState | null>(null);
-  const [winProb, setWinProb] = useState<number[]>([]);
-  const [showWinProb, setShowWinProb] = useState(true);
+  const [possession, setPossession] = useState<number[]>([]);
+  const [showPossession, setShowPossession] = useState(true);
   const [now, setNow] = useState(Date.now());
   const dragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({
     dragging: false, lastX: 0, lastY: 0,
@@ -149,7 +155,7 @@ export function Shrimp() {
     api.getConfig().then((cfg: any) => {
       const id = cfg?.characterPack ?? 'default-shrimp';
       api.getCharacter(id).then((p: Pack) => setPack(p));
-      if (typeof cfg?.showWinProb === 'boolean') setShowWinProb(cfg.showWinProb);
+      setShowPossession(cfg?.showPossession ?? cfg?.showWinProb !== false);
     });
     const off = api.onEvent((ev: any) => {
       if (ev?.kind === 'mood') {
@@ -162,9 +168,10 @@ export function Shrimp() {
         setPack(ev.pack ?? null);
       } else if (ev?.kind === 'score') {
         setScore(ev.score ?? null);
-        if (typeof ev.showWinProb === 'boolean') setShowWinProb(ev.showWinProb);
-      } else if (ev?.kind === 'winprob') {
-        setWinProb(Array.isArray(ev.points) ? ev.points : []);
+        if (typeof ev.showPossession === 'boolean') setShowPossession(ev.showPossession);
+        else if (typeof ev.showWinProb === 'boolean') setShowPossession(ev.showWinProb);
+      } else if (ev?.kind === 'possession' || ev?.kind === 'winprob') {
+        setPossession(Array.isArray(ev.points) ? ev.points : []);
       }
     });
     return () => off?.();
@@ -261,8 +268,8 @@ export function Shrimp() {
           {contextLabel && (
             <div className="series-chip">{contextLabel}</div>
           )}
-          {showWinProb && winProb.length > 1 && score.statusState === 'in' && (
-            <Sparkline data={winProb} />
+          {showPossession && possession.length > 1 && score.statusState === 'in' && (
+            <PossessionSparkline data={possession} pct={score.myPossessionPct} />
           )}
         </div>
       )}

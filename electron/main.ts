@@ -1,22 +1,32 @@
-import { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, dialog, globalShortcut } from 'electron';
+import { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, dialog, globalShortcut, session } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
-import { startPoller, stopPoller, setFavoriteTeams, getKnownTeams, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, type GameEvent, type ScoreState } from './poller';
+import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, type GameEvent, type ScoreState } from './poller';
 import { listPacks, ensureCharactersDir, charactersDir, packById, seedBuiltinPacks, DEFAULT_PACK_ID } from './characters';
+import { buildSessionProxyConfig, proxyAuthForInput, type ProxyAuth, type ProxyMode } from './proxy';
 
 // Make the process easier to find in Activity Monitor / pkill
 process.title = '世界杯 Buddy';
 
+// Windows transparent window fix: enable compositor transparency before app is ready.
+// Without this, transparent BrowserWindows show a black background on many Windows machines.
+if (process.platform === 'win32') {
+  app.commandLine.appendSwitch('enable-transparent-visuals');
+  app.commandLine.appendSwitch('disable-gpu-compositing');
+}
+
 // Suppress EPIPE on stdio when launched without a terminal (Finder/launchd).
 // Without this, any console.* call after the pipe closes throws and crashes the app.
+// On Windows, ECONNRESET is the equivalent error for broken pipe scenarios.
+const SUPPRESSED_ERR_CODES = new Set(['EPIPE', 'ECONNRESET', 'ERR_STREAM_DESTROYED']);
 for (const stream of [process.stdout, process.stderr]) {
   stream.on('error', (err: NodeJS.ErrnoException) => {
-    if (err && err.code === 'EPIPE') return;
+    if (err && SUPPRESSED_ERR_CODES.has(err.code ?? '')) return;
   });
 }
 process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
-  if (err && err.code === 'EPIPE') return;
+  if (err && SUPPRESSED_ERR_CODES.has(err.code ?? '')) return;
   // Don't bring up Electron's error dialog for non-fatal stuff
   try { console.error('[uncaught]', err); } catch {}
 });
@@ -26,6 +36,39 @@ const TRAY_ICON_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAABo0lEQVR4nNXZwXXDIAwA0Fw4doEefezNh67hDTxBJ8oG2YB1ukMGUPGL36vAAiQsEaP3dEn8nB8iiwC3m1IAgAs5h1xCrnsu+2tO63NOxY7ywI/t2rU3cgr5ECBzsd1jsoS6IvTnu5xluG7JwOunlyNleJ1SCTe6q0Hr8PtZrDeBluH+2lgN9KEMrLE0mlcekD5gvbA0uvwgwqt1vQ9Lo/MtD3CfLd3w+UunDfqRw06s0aWAFug4jjMia3RrKDv0cZSro8vFaKJR5DvDWUjhuq/PjyiF6BWDPQvMHRkbsOeXwzXAcOy9GrWpXRIx2m3guRe4Of9j3sALC8zBWGBj8MLrEBTKeuKgwascnAJrWI3pOwHzS0KSuS/VAk9KgvfQtWIl79XBM7+ttYBb38+DHX/i0MJKr0Mhm5rfD46mZnmn6A+Ol0tqZaEJpspBvDzSQMtHl/wDz1siScBn2loc9KahySi3Thyl0UVg/WV+ywwXR3lnE0baSEHocbaqEHqczcDuaA0sQo+zoY3Q4xwZIPQ4hzIJfIxjrwz++geLuYBOR7d/OzOLeNrHweMAAAAASUVORK5CYII=';
 
 const isDev = process.env.NODE_ENV === 'development';
+const isMac = process.platform === 'darwin';
+const isWin = process.platform === 'win32';
+const HOTKEY_LABEL = isMac ? '⌘⇧X' : 'Ctrl+Shift+X';
+
+/** Show a window without stealing focus on macOS (showInactive), or normally on other platforms. */
+function showWithoutFocus(win: BrowserWindow) {
+  if (isMac) {
+    win.showInactive();
+  } else {
+    win.show();
+  }
+}
+
+// =====================================================================
+// Network proxy — applies to Electron's Chromium stack: autoUpdater and
+// poller net.fetch() both use this session.
+// =====================================================================
+let activeProxyAuth: ProxyAuth | null = null;
+
+async function applyProxy(cfg: Config) {
+  const ses = session.defaultSession;
+  activeProxyAuth = proxyAuthForInput(cfg.proxyMode ?? 'direct', cfg.proxyUrl);
+  await ses.setProxy(buildSessionProxyConfig(cfg.proxyMode ?? 'direct', cfg.proxyUrl, cfg.proxyBypass));
+  try { await ses.closeAllConnections(); } catch { /* older Electron */ }
+}
+
+function setupProxyAuthHandler() {
+  app.on('login', (event, _webContents, _request, authInfo, callback) => {
+    if (!authInfo.isProxy || !activeProxyAuth) return;
+    event.preventDefault();
+    callback(activeProxyAuth.username, activeProxyAuth.password);
+  });
+}
 const SHRIMP_W = 240;
 const SHRIMP_H = 280;
 const BUBBLE_W = 320;
@@ -76,7 +119,12 @@ type Config = {
   characterPack?: string;
   quietMode?: boolean;       // suppress live-game bubbles (chip still updates)
   soundEnabled?: boolean;    // play 8-bit tones on score/end
-  showWinProb?: boolean;     // render sparkline under chip
+  showPossession?: boolean;  // render ESPN possessionPct curve under chip
+  showWinProb?: boolean;     // legacy v1.1 setting name, migrated to showPossession
+  // Network proxy — corporate intranets on Windows often block direct HTTPS
+  proxyMode?: ProxyMode;     // 'direct' (default), 'system' (use OS proxy), 'custom' (manual URL)
+  proxyUrl?: string;         // e.g. 'http://proxy.corp.com:8080'
+  proxyBypass?: string;      // comma-separated domains to bypass, e.g. '<local>,*.corp.com'
 };
 
 function loadConfig(): Config {
@@ -90,13 +138,21 @@ function loadConfig(): Config {
       characterPack: DEFAULT_PACK_ID,
       quietMode: false,
       soundEnabled: false,
+      showPossession: true,
       showWinProb: true,
+      proxyMode: 'direct',
+      proxyUrl: '',
+      proxyBypass: '<local>',
     };
   }
   // Backfill defaults for older configs
   if (cfg.quietMode === undefined) cfg.quietMode = false;
   if (cfg.soundEnabled === undefined) cfg.soundEnabled = false;
+  if (cfg.showPossession === undefined) cfg.showPossession = cfg.showWinProb !== false;
   if (cfg.showWinProb === undefined) cfg.showWinProb = true;
+  if (cfg.proxyMode === undefined) cfg.proxyMode = 'direct';
+  if (cfg.proxyUrl === undefined) cfg.proxyUrl = '';
+  if (cfg.proxyBypass === undefined) cfg.proxyBypass = '<local>';
   // Sanitize: drop teams that no longer exist in current sport list
   const known = new Set(getKnownTeams().map(t => t.toLowerCase()));
   const filtered = (cfg.favoriteTeams ?? []).filter(t =>
@@ -126,8 +182,10 @@ function loadUrl(win: BrowserWindow, route: string) {
 function createShrimpWindow() {
   const cfg = loadConfig();
   const { workArea } = screen.getPrimaryDisplay();
+  // On Windows with DPI scaling, position values may need adjustment.
+  // Use safe defaults that account for taskbar position on both platforms.
   const x = cfg.positionX ?? workArea.x + workArea.width - SHRIMP_W - 40;
-  const y = cfg.positionY ?? workArea.y + workArea.height - SHRIMP_H - 80;
+  const y = cfg.positionY ?? workArea.y + workArea.height - SHRIMP_H - (isWin ? 20 : 80);
 
   shrimpWindow = new BrowserWindow({
     width: SHRIMP_W,
@@ -141,9 +199,12 @@ function createShrimpWindow() {
     hasShadow: false,
     skipTaskbar: true,
     show: false,
-    focusable: false, // never steal focus from whatever the user is typing in
+    // macOS: focusable:false keeps the window from stealing focus (ideal for an overlay).
+    // Windows: focusable:false can block click events entirely, so we keep it focusable
+    // and rely on show()/showInactive() + setAlwaysOnTop to avoid stealing focus.
+    focusable: !isMac,
     acceptFirstMouse: true, // but still receive clicks immediately
-    type: process.platform === 'darwin' ? 'panel' : undefined, // NSPanel on Mac = floats without activating
+    type: isMac ? 'panel' : undefined, // NSPanel on Mac = floats without activating
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -151,11 +212,15 @@ function createShrimpWindow() {
     },
   });
 
-  shrimpWindow.setAlwaysOnTop(true, 'screen-saver');
-  shrimpWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  shrimpWindow.setAlwaysOnTop(true, isMac ? 'screen-saver' : 'floating');
+  if (isMac) {
+    shrimpWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  }
 
   loadUrl(shrimpWindow, '/shrimp');
-  shrimpWindow.once('ready-to-show', () => shrimpWindow?.showInactive());
+  shrimpWindow.once('ready-to-show', () => {
+    if (shrimpWindow) showWithoutFocus(shrimpWindow);
+  });
 
   shrimpWindow.on('moved', () => {
     if (!shrimpWindow) return;
@@ -210,9 +275,10 @@ function showBubble(message: string, mood: string, ttl = 5000) {
     resizable: false,
     hasShadow: false,
     skipTaskbar: true,
-    focusable: false, // never steal focus from the user's work
+    // macOS: focusable:false prevents stealing focus; Windows: must be true for clicks
+    focusable: !isMac,
     acceptFirstMouse: true, // but interactive: drag / pin / close
-    type: process.platform === 'darwin' ? 'panel' : undefined,
+    type: isMac ? 'panel' : undefined,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -220,7 +286,7 @@ function showBubble(message: string, mood: string, ttl = 5000) {
       nodeIntegration: false,
     },
   });
-  bubble.setAlwaysOnTop(true, 'screen-saver');
+  bubble.setAlwaysOnTop(true, isMac ? 'screen-saver' : 'floating');
 
   const encoded = encodeURIComponent(JSON.stringify({ message, mood }));
   if (isDev) {
@@ -228,7 +294,7 @@ function showBubble(message: string, mood: string, ttl = 5000) {
   } else {
     bubble.loadFile(path.join(__dirname, '../dist/index.html'), { hash: `/bubble?data=${encoded}` });
   }
-  bubble.once('ready-to-show', () => bubble.showInactive());
+  bubble.once('ready-to-show', () => showWithoutFocus(bubble));
 
   const id = bubble.webContents.id;
   const timer = setTimeout(() => {
@@ -316,7 +382,12 @@ function buildTray() {
   // macOS menu bar items are 22pt high; @2x retina = 44px. The PNG is 44x44.
   const trayImage = img.resize({ width: 22, height: 22 });
   tray = new Tray(trayImage);
-  tray.setTitle(' 🦐');  // adds visible text next to icon in menu bar
+  // tray.setTitle() is macOS-only — adds visible text next to the menu bar icon.
+  if (isMac) tray.setTitle(' 🦐');
+  // On Windows, left-click the tray icon to toggle the shrimp (no Dock to fall back to)
+  if (isWin) {
+    tray.on('click', () => toggleShrimp());
+  }
   rebuildTrayMenu();
 }
 
@@ -326,7 +397,7 @@ function rebuildTrayMenu() {
   const menu = Menu.buildFromTemplate([
     { label: `🦐 世界杯 Buddy  ·  ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'}`, enabled: false },
     { type: 'separator' },
-    { label: '🙈 显示/隐藏虾仔（⌘⇧X）', click: () => toggleShrimp() },
+    { label: `🙈 显示/隐藏虾仔（${HOTKEY_LABEL}）`, click: () => toggleShrimp() },
     { label: '⚙️ 设置', click: () => createSettingsWindow() },
     { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },
     { label: '⚽ 看看赛况', click: () => { showMatchInfo().catch(() => {}); } },
@@ -334,7 +405,9 @@ function rebuildTrayMenu() {
     { type: 'separator' },
     { label: '🦐💔 含泪告别（退出）', click: () => app.quit() },
   ]);
-  tray.setToolTip('世界杯 Buddy（双击虾仔即可退出）');
+  tray.setToolTip(isWin
+    ? `世界杯 Buddy · ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'} · 左键显示/隐藏`
+    : '世界杯 Buddy（双击虾仔即可退出）');
   tray.setContextMenu(menu);
 }
 
@@ -343,26 +416,38 @@ const HOTKEY = 'CommandOrControl+Shift+X';
 function toggleShrimp() {
   if (!shrimpWindow) {
     createShrimpWindow();
-    if (process.platform === 'darwin') app.dock?.hide();
+    if (isMac) app.dock?.hide();
     return;
   }
   if (shrimpWindow.isVisible()) {
     shrimpWindow.hide();
     // Surface Dock icon as a visible "call me back" handle (tray hides on notched Macs)
-    if (process.platform === 'darwin') app.dock?.show().catch(() => {});
+    if (isMac) app.dock?.show().catch(() => {});
   } else {
-    shrimpWindow.showInactive();
-    if (process.platform === 'darwin') app.dock?.hide();
+    // Validate position is still within screen bounds (multi-monitor / DPI change guard)
+    const displays = screen.getAllDisplays();
+    const [cx, cy] = shrimpWindow.getPosition();
+    const onScreen = displays.some(d => {
+      const { x, y, width, height } = d.workArea;
+      return cx >= x && cx < x + width && cy >= y && cy < y + height;
+    });
+    if (!onScreen) {
+      // Reset to bottom-right corner of primary display
+      const { workArea } = screen.getPrimaryDisplay();
+      shrimpWindow.setPosition(workArea.x + workArea.width - SHRIMP_W - 40, workArea.y + workArea.height - SHRIMP_H - (isWin ? 20 : 80));
+    }
+    showWithoutFocus(shrimpWindow);
+    if (isMac) app.dock?.hide();
   }
 }
 
 function hideShrimpWithTip() {
   if (!shrimpWindow || !shrimpWindow.isVisible()) return;
-  showBubble('🙈 虾仔藏好啦！⌘⇧X 召回 / 或点 Dock 上的虾仔', 'sleep', 4500);
+  showBubble(`🙈 虾仔藏好啦！${HOTKEY_LABEL} 召回 / 或点 Dock 上的虾仔`, 'sleep', 4500);
   setTimeout(() => {
     if (shrimpWindow?.isVisible()) {
       shrimpWindow.hide();
-      if (process.platform === 'darwin') app.dock?.show().catch(() => {});
+      if (isMac) app.dock?.show().catch(() => {});
     }
   }, 1500);
 }
@@ -533,11 +618,20 @@ async function saveDailyCard(): Promise<string | null> {
   return filepath;
 }
 
-app.whenReady().then(() => {
-  if (process.platform === 'darwin') app.dock?.hide();
+app.whenReady().then(async () => {
+  if (isMac) app.dock?.hide();
+
+  // Windows: set AppUserModelId for proper taskbar grouping and toast notifications.
+  if (isWin) {
+    app.setAppUserModelId('com.worldcupbuddy.app');
+  }
   ensureCharactersDir();
   seedBuiltinPacks();   // copy bundled 🇧🇷 pack + 48 flag avatars on first run
   const cfg = loadConfig();
+
+  // Apply proxy settings before any network requests start
+  await applyProxy(cfg).catch(() => {});
+  setupProxyAuthHandler();
 
   createShrimpWindow();
   buildTray();
@@ -552,15 +646,15 @@ app.whenReady().then(() => {
 
   // Welcome bubble so the user has a visible confirmation it launched
   setTimeout(() => {
-    showBubble('🦐 虾仔上岗啦！按 ⌘⇧X 可以随时召回我', 'flag', 6000);
+    showBubble(`🦐 虾仔上岗啦！按 ${HOTKEY_LABEL} 可以随时召回我`, 'flag', 6000);
   }, 1200);
 
   startPoller({
     favoriteTeams: cfg.favoriteTeams,
     mode: cfg.mode,
     onEvent: onGameEvent,
-    onScore: (s) => emitToShrimp({ kind: 'score', score: s, showWinProb: !!loadConfig().showWinProb }),
-    onWinProb: (points) => emitToShrimp({ kind: 'winprob', points }),
+    onScore: (s) => emitToShrimp({ kind: 'score', score: s, showPossession: loadConfig().showPossession !== false }),
+    onWinProb: (points) => emitToShrimp({ kind: 'possession', points }),
   });
 
   // IPC: renderer asks for config / known teams / updates
@@ -574,8 +668,30 @@ app.whenReady().then(() => {
       const pack = packById(next.characterPack ?? DEFAULT_PACK_ID);
       emitToShrimp({ kind: 'pack', pack });
     }
+    // Re-apply proxy if proxy settings changed
+    if (prev.proxyMode !== next.proxyMode || prev.proxyUrl !== next.proxyUrl || prev.proxyBypass !== next.proxyBypass) {
+      applyProxy(next).catch(() => {});
+    }
     return next;
   });
+
+  // Proxy connectivity test — tries ESPN API through the specified proxy
+  ipcMain.handle('proxy:test', async (_e, mode: ProxyMode, proxyUrl?: string, proxyBypass?: string) => {
+    const saved = loadConfig();
+    const testCfg: Config = {
+      ...saved,
+      proxyMode: mode,
+      proxyUrl: proxyUrl ?? '',
+      proxyBypass: proxyBypass ?? '<local>',
+    };
+    try {
+      await applyProxy(testCfg);
+      return await testProxyConnectivity();
+    } finally {
+      await applyProxy(saved);
+    }
+  });
+
   ipcMain.handle('teams:list', async () => getKnownTeams());
   ipcMain.handle('shrimp:drag', (_e, dx: number, dy: number) => {
     if (!shrimpWindow) return;
@@ -593,7 +709,7 @@ app.whenReady().then(() => {
       { label: '⚙️ 设置', click: () => createSettingsWindow() },
       { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },
       { label: '⚽ 看看赛况', click: () => { showMatchInfo().catch(() => {}); } },
-      { label: '🙈 藏起来一会儿（⌘⇧X 召回）', click: () => hideShrimpWithTip() },
+      { label: `🙈 藏起来一会儿（${HOTKEY_LABEL} 召回）`, click: () => hideShrimpWithTip() },
       { type: 'separator' },
       { label: '🦐💔 含泪告别（退出）', click: () => app.quit() },
     ]);
@@ -670,7 +786,7 @@ app.on('activate', () => {
   } else if (!shrimpWindow.isVisible()) {
     shrimpWindow.showInactive();
   }
-  if (process.platform === 'darwin') app.dock?.hide();
+  if (isMac) app.dock?.hide();
 });
 
 app.on('will-quit', () => {

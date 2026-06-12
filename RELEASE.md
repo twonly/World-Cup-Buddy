@@ -2,7 +2,7 @@
 
 ## 一次性 setup
 
-1. **GitHub repo 已就绪** — https://github.com/twonly/NBA-Buddy
+1. **GitHub repo 已就绪** — https://github.com/twonly/World-Cup-Buddy
 2. **Actions 权限** — repo Settings → Actions → General → Workflow permissions, 选 "Read and write permissions" 并勾上 "Allow GitHub Actions to create and approve pull requests"
 
 不用准备签名证书 — 当前发布未签名版, 用户首次启动需绕一下 quarantine / SmartScreen (README 里写了)。后续要签 再加 `CSC_LINK` + `CSC_KEY_PASSWORD` 到 repo secrets 即可。
@@ -40,7 +40,7 @@ git push --follow-tags
 - 每个 runner 跑 `npm ci` + `npm run build` + `electron-builder --publish always`
 - 自动把 `.dmg` / `.exe` / `latest-mac.yml` / `latest.yml` 上传到 `v0.1.1` Release
 
-去 https://github.com/twonly/NBA-Buddy/actions 看进度, 一般 5-8 分钟。
+去 https://github.com/twonly/World-Cup-Buddy/actions 看进度, 一般 5-8 分钟。
 
 ### 4. 用户那边
 
@@ -58,7 +58,7 @@ git push --follow-tags
 
 - 确认 `package.json` 的 `version` 和 tag 一致 (`v0.1.1` ↔ `"0.1.1"`)
 - 确认 Release 里有 `latest-mac.yml` 和 `latest.yml`(没有就是 Action 没跑 `--publish always`)
-- 用户那边日志: `~/Library/Logs/篮球虾仔/main.log` (macOS) / `%APPDATA%\篮球虾仔\logs\main.log` (Win)
+- 用户那边日志: `~/Library/Logs/World Cup Buddy/main.log` (macOS) / `%APPDATA%\World Cup Buddy\logs\main.log` (Win)
 
 ### 想发预览版不通知用户
 

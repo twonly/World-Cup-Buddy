@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as fs from 'fs';
+import * as url from 'url';
 import { app } from 'electron';
 
 export type Mood = 'idle' | 'watch' | 'cheer' | 'sad' | 'flag' | 'sleep' | 'dance';
@@ -167,13 +168,14 @@ export function listPacks(): CharacterPack[] {
     for (const mood of ALL_MOODS) {
       const candidate = path.join(folder, `${mood}.png`);
       if (fs.existsSync(candidate)) {
-        frames[mood] = `file://${candidate}`;
+        // Use url.pathToFileURL for cross-platform compatibility (Windows backslash paths)
+        frames[mood] = url.pathToFileURL(candidate).href;
       }
     }
     // Allow single-image packs (e.g. country flags): any .png in folder becomes idle.
     if (!frames.idle) {
       const anyPng = (fs.readdirSync(folder).find(f => f.toLowerCase().endsWith('.png')));
-      if (anyPng) frames.idle = `file://${path.join(folder, anyPng)}`;
+      if (anyPng) frames.idle = url.pathToFileURL(path.join(folder, anyPng)).href;
     }
     if (Object.keys(frames).length === 0) continue;
     // Fill missing moods with idle as fallback so the renderer always has something.

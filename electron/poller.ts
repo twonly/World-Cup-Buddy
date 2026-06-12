@@ -1,7 +1,6 @@
-import * as https from 'https';
+import { net } from 'electron';
 
-// 7 moods, shared with the character system. Same vocabulary as NBA Buddy so
-// custom packs (球星 / 国家公仔) stay drop-in compatible.
+// 7 moods, shared with the character system so custom packs stay drop-in compatible.
 export type Mood = 'idle' | 'watch' | 'cheer' | 'sad' | 'flag' | 'sleep' | 'dance';
 export type GameEvent = { mood: Mood; message: string; ttl?: number };
 
@@ -10,7 +9,7 @@ type PollerOptions = {
   mode: 'live' | 'replay';
   onEvent: (ev: GameEvent) => void;
   onScore?: (s: ScoreState | null) => void;
-  onWinProb?: (points: number[]) => void;   // unused for soccer (ESPN has no win prob); kept for API compat
+  onWinProb?: (points: number[]) => void;   // legacy callback name; carries ESPN possessionPct curve
 };
 
 export type ScoreState = {
@@ -39,9 +38,52 @@ export type ScoreState = {
   groupName?: string;               // "Group A" during group stage
   roundName?: string;               // "Round of 32", "Final", ...
   venue?: string;
+  myPossessionPct?: number;
+  oppPossessionPct?: number;
+  myShots?: number;
+  oppShots?: number;
+  myShotsOnTarget?: number;
+  oppShotsOnTarget?: number;
+  myCorners?: number;
+  oppCorners?: number;
+  myFouls?: number;
+  oppFouls?: number;
 };
 let currentScore: ScoreState | null = null;
+let currentPossession: number[] = [];
+let possessionHistory = new Map<string, number[]>();
 export function getCurrentScore(): ScoreState | null { return currentScore; }
+export function getCurrentPossession(): number[] { return [...currentPossession]; }
+
+// ---- Proxy support ----
+// The poller uses Electron's net.fetch() which goes through Chromium's network stack.
+// Proxy is configured via session.setProxy() in main.ts — applies to ALL requests
+// (poller, autoUpdater, net.fetch) automatically. No separate proxy agent needed.
+// The testProxyConnectivity function below is used for verifying proxy settings.
+
+/** Test ESPN connectivity using whatever proxy main.ts has applied. */
+export async function testProxyConnectivity(): Promise<{ ok: boolean; message: string }> {
+  const testUrl = `https://site.api.espn.com/apis/site/v2/sports/soccer/${WC_LEAGUE}/scoreboard`;
+  try {
+    const result = await httpGetJson(testUrl);
+    if (result && (result.events ?? []).length > 0) {
+      return { ok: true, message: `✅ 代理连通！ESPN API 正常响应，已发现 ${result.events.length} 场比赛数据` };
+    }
+    return { ok: true, message: '✅ 代理连通！ESPN API 有响应（但暂无比赛数据）' };
+  } catch (err: any) {
+    const msg = err.message || String(err);
+    if (msg.includes('abort') || msg.includes('timeout')) {
+      return { ok: false, message: '❌ 连接超时 — 代理地址可能不正确，或代理服务器未响应' };
+    }
+    if (msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET') || msg.toLowerCase().includes('proxy') || msg.includes('tunnel')) {
+      return { ok: false, message: `❌ 代理拒绝连接 — ${msg}` };
+    }
+    if (msg.includes('HTTP 407')) {
+      return { ok: false, message: '❌ 代理需要认证 — 请在代理地址中包含用户名和密码 (http://user:pass@host:port)' };
+    }
+    return { ok: false, message: `❌ 连接失败 — ${msg}` };
+  }
+}
 
 // ESPN soccer league slug for the FIFA World Cup. Season auto-selects 2026.
 const WC_LEAGUE = 'fifa.world';
@@ -164,6 +206,8 @@ export function setFavoriteTeams(teams: string[]) {
   lastSeenPlayId = new Map();
   lastSeenStatus = new Map();
   lastEventAt = new Map();
+  possessionHistory = new Map();
+  currentPossession = [];
   pendingEmits.forEach(t => clearTimeout(t));
   pendingEmits = [];
   if (replayTimer) clearTimeout(replayTimer);
@@ -185,6 +229,8 @@ export function stopPoller() {
   pendingEmits = [];
   pollTimer = null;
   replayTimer = null;
+  currentPossession = [];
+  possessionHistory = new Map();
 }
 
 // Force a poll immediately (e.g. user clicked the buddy). 5s debounced.
@@ -380,6 +426,8 @@ type EspnEvent = {
   groupName?: string;
   roundName?: string;
   venue?: string;
+  homeStats: SoccerStats;
+  awayStats: SoccerStats;
 };
 
 type EspnPlay = {
@@ -390,6 +438,15 @@ type EspnPlay = {
   teamName?: string;
   clock: string;
   homeScore: number; awayScore: number;
+  sortKey?: number;
+};
+
+type SoccerStats = {
+  possessionPct?: number;
+  totalShots?: number;
+  shotsOnTarget?: number;
+  corners?: number;
+  fouls?: number;
 };
 
 async function tickLive() {
@@ -424,6 +481,8 @@ async function tickLive() {
   const best = sorted[0];
   if (best) {
     const bestMyHome = fav.some(f => teamMatches(best.home, f));
+    const myStats = bestMyHome ? best.homeStats : best.awayStats;
+    const oppStats = bestMyHome ? best.awayStats : best.homeStats;
     currentScore = {
       matchId: best.id,
       myTeam: bestMyHome ? best.home : best.away,
@@ -448,8 +507,27 @@ async function tickLive() {
       groupName: best.groupName,
       roundName: best.roundName,
       venue: best.venue,
+      myPossessionPct: myStats.possessionPct,
+      oppPossessionPct: oppStats.possessionPct,
+      myShots: myStats.totalShots,
+      oppShots: oppStats.totalShots,
+      myShotsOnTarget: myStats.shotsOnTarget,
+      oppShotsOnTarget: oppStats.shotsOnTarget,
+      myCorners: myStats.corners,
+      oppCorners: oppStats.corners,
+      myFouls: myStats.fouls,
+      oppFouls: oppStats.fouls,
     };
     currentOptions.onScore?.(currentScore);
+    if (best.state === 'in') {
+      const next = appendPossessionPoint(possessionHistory.get(best.id) ?? [], myStats.possessionPct);
+      possessionHistory.set(best.id, next);
+      currentPossession = next;
+      currentOptions.onWinProb?.(currentPossession);
+    } else {
+      currentPossession = [];
+      currentOptions.onWinProb?.([]);
+    }
   }
 
   for (const m of relevant) {
@@ -496,7 +574,7 @@ async function tickLive() {
           `☕ 中场 ${myTeam} ${myScore}-${oppScore} ${oppTeam}, 喘口气`,
           `🛋️ 半场休息, ${myScore}-${oppScore}`,
         ]), ttl: 6000 }, m.id);
-      } else if (m.state === 'in' && (prevStatus.includes('HALF') || isHalftime(prevStatus))) {
+      } else if (isSecondHalfRestartTransition(prevStatus, m)) {
         emit({ mood: 'flag', message: pick([
           `▶️ 下半场开打! ${myTeam} ${myScore}-${oppScore} ${oppTeam}`,
           `🔄 易边再战!`,
@@ -616,6 +694,12 @@ function isKickoffTransition(prevStatus: string, m: EspnEvent): boolean {
 function isHalftime(status: string): boolean {
   return /HALFTIME|HALF_TIME/i.test(status);
 }
+export function isSecondHalfRestartTransition(
+  prevStatus: string,
+  m: Pick<EspnEvent, 'state' | 'status' | 'period'>,
+): boolean {
+  return m.state === 'in' && m.period === 2 && isHalftime(prevStatus) && /SECOND_HALF|IN_PROGRESS/i.test(m.status);
+}
 function phaseLabel(m: EspnEvent): string {
   if (m.period >= 5) return '点球';
   if (m.period >= 3) return '加时';
@@ -625,9 +709,9 @@ function phaseLabel(m: EspnEvent): string {
 }
 
 export function collectNewKeyEvents(plays: EspnPlay[], lastSeenId: string | undefined): EspnPlay[] {
-  // Only surface meaningful beats: goals, cards, key moments.
+  // Surface soccer beats that feel like live commentary, not every routine touch.
   const meaningful = (p: EspnPlay) =>
-    p.scoringPlay || /goal|card|penalty|own goal/i.test(p.typeText);
+    p.scoringPlay || /goal|card|penalty|own goal|shot|attempt|save|blocked|miss|corner|foul|free kick|handball|offside|substitution|delay|injury|tackle|interception|turnover|dispossess/i.test(`${p.typeText} ${p.text}`);
   if (!lastSeenId) return plays.filter(meaningful).slice(-1);
   const idx = plays.findIndex(p => p.id === lastSeenId);
   if (idx < 0) return plays.filter(meaningful).slice(-1);
@@ -679,6 +763,54 @@ export function keyEventToGameEvent(
     return { mood: 'watch', message: `🟨 ${at}对方黄牌 | ${scoreStr}`, ttl: 5000 };
   }
 
+  // ---- Attempts / saves ----
+  if (/shot on target|attempt saved|save/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'cheer', message: `🥅 ${at}我方射正! 门将扑出 | ${scoreStr}`, ttl: 5200 };
+    return { mood: 'sad', message: `🧤 ${at}对方射正, 门前有点险 | ${scoreStr}`, ttl: 5200 };
+  }
+  if (/shot blocked|blocked/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'watch', message: `🚧 ${at}我方射门被封堵 | ${scoreStr}`, ttl: 4800 };
+    return { mood: 'watch', message: `🛡️ ${at}挡住对方射门 | ${scoreStr}`, ttl: 4800 };
+  }
+  if (/shot|attempt|miss|off target/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'watch', message: `🎯 ${at}我方起脚打门, 还差一点 | ${scoreStr}`, ttl: 4800 };
+    return { mood: 'watch', message: `😮 ${at}对方完成射门 | ${scoreStr}`, ttl: 4800 };
+  }
+
+  // ---- Set pieces / stoppages ----
+  if (/corner/.test(type)) {
+    if (isMyTeam) return { mood: 'watch', message: `🚩 ${at}我方角球机会 | ${scoreStr}`, ttl: 5000 };
+    return { mood: 'watch', message: `🚩 ${at}对方角球, 禁区盯紧 | ${scoreStr}`, ttl: 5000 };
+  }
+  if (/substitution/.test(type)) {
+    if (isMyTeam) return { mood: 'watch', message: `🔁 ${at}我方换人调整 | ${scoreStr}`, ttl: 4800 };
+    return { mood: 'watch', message: `🔁 ${at}对方换人 | ${scoreStr}`, ttl: 4800 };
+  }
+  if (/start delay/.test(type)) {
+    return { mood: 'sleep', message: `⏸️ ${at}比赛暂停${/drink/i.test(play.text) ? ', 补水时间' : ''} | ${scoreStr}`, ttl: 5000 };
+  }
+  if (/end delay/.test(type)) {
+    return { mood: 'flag', message: `▶️ ${at}比赛恢复 | ${scoreStr}`, ttl: 4500 };
+  }
+
+  // ---- Fouls / turnovers ----
+  if (/handball/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'sad', message: `✋ ${at}我方手球失误 | ${scoreStr}`, ttl: 5000 };
+    return { mood: 'cheer', message: `✋ ${at}对方手球, 我们拿回球权 | ${scoreStr}`, ttl: 5000 };
+  }
+  if (/offside/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'watch', message: `🚩 ${at}我方越位, 进攻先停 | ${scoreStr}`, ttl: 4500 };
+    return { mood: 'cheer', message: `🚩 ${at}对方越位 | ${scoreStr}`, ttl: 4500 };
+  }
+  if (/foul|free kick/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'sad', message: `💢 ${at}我方犯规, 小心定位球 | ${scoreStr}`, ttl: 4800 };
+    return { mood: 'watch', message: `💪 ${at}对方犯规, 我们获得机会 | ${scoreStr}`, ttl: 4800 };
+  }
+  if (/tackle|interception|turnover|dispossess/.test(`${type} ${play.text.toLowerCase()}`)) {
+    if (isMyTeam) return { mood: 'cheer', message: `🦵 ${at}我方完成抢断 | ${scoreStr}`, ttl: 4600 };
+    return { mood: 'sad', message: `😬 ${at}我方丢球权, 对方抢断 | ${scoreStr}`, ttl: 4600 };
+  }
+
   return null;
 }
 
@@ -711,6 +843,8 @@ async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
 
     const shoot = (c: any) => (c?.shootoutScore !== undefined && c?.shootoutScore !== null)
       ? Number(c.shootoutScore) : undefined;
+    const homeStats = extractCompetitorStats(home);
+    const awayStats = extractCompetitorStats(away);
 
     out.push({
       id: String(ev.id),
@@ -738,6 +872,8 @@ async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
       groupName,
       roundName,
       venue: comp?.venue?.fullName,
+      homeStats,
+      awayStats,
     });
   }
   return out;
@@ -746,21 +882,97 @@ async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
 async function fetchEspnPlays(eventId: string): Promise<EspnPlay[]> {
   const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${WC_LEAGUE}/summary?event=${eventId}`;
   const json = await httpGetJson(url);
-  const out: EspnPlay[] = [];
-  const events = json?.keyEvents ?? json?.commentary ?? [];
-  for (const p of events) {
-    out.push({
-      id: String(p?.id ?? p?.sequence ?? `${p?.clock?.displayValue}-${p?.type?.text}`),
-      text: p?.text ?? '',
-      typeText: p?.type?.text ?? '',
-      scoringPlay: !!p?.scoringPlay,
-      teamName: p?.team?.displayName,
-      clock: p?.clock?.displayValue ?? '',
-      homeScore: Number(p?.homeScore ?? 0),
-      awayScore: Number(p?.awayScore ?? 0),
-    });
-  }
-  return out;
+  return extractEspnPlaysFromSummary(json);
+}
+
+function numberValue(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const n = Number(String(value).replace('%', ''));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function statValue(stats: any[], name: string): number | undefined {
+  const stat = stats.find(s => s?.name === name);
+  return numberValue(stat?.value ?? stat?.displayValue);
+}
+
+function extractCompetitorStats(competitor: any): SoccerStats {
+  const stats = competitor?.statistics ?? [];
+  return {
+    possessionPct: statValue(stats, 'possessionPct'),
+    totalShots: statValue(stats, 'totalShots'),
+    shotsOnTarget: statValue(stats, 'shotsOnTarget'),
+    corners: statValue(stats, 'wonCorners'),
+    fouls: statValue(stats, 'foulsCommitted'),
+  };
+}
+
+export function appendPossessionPoint(prev: number[], pct: number | undefined, maxPoints = 24): number[] {
+  if (pct === undefined || !Number.isFinite(pct)) return [...prev].slice(-maxPoints);
+  const clamped = Math.max(0, Math.min(100, pct)) / 100;
+  const point = Number(clamped.toFixed(3));
+  return [...prev, point].slice(-maxPoints);
+}
+
+function playFromRaw(raw: any, fallbackSort = 0): EspnPlay | null {
+  const play = raw?.play ?? raw;
+  const text = raw?.text ?? play?.text ?? '';
+  const typeText = play?.type?.text ?? raw?.type?.text ?? inferPlayType(text);
+  const clock = play?.clock?.displayValue ?? raw?.clock?.displayValue ?? raw?.time?.displayValue ?? '';
+  const sortKey = Number(play?.clock?.value ?? raw?.clock?.value ?? raw?.time?.value ?? parseClockSort(clock) ?? raw?.sequence ?? fallbackSort);
+  const id = String(play?.id ?? raw?.id ?? raw?.sequence ?? `${clock}-${typeText}-${text.slice(0, 48)}`);
+  if (!id || (!typeText && !text)) return null;
+  return {
+    id,
+    text,
+    typeText,
+    scoringPlay: !!(play?.scoringPlay ?? raw?.scoringPlay) || /goal/i.test(typeText),
+    teamName: play?.team?.displayName ?? raw?.team?.displayName,
+    clock,
+    homeScore: Number(play?.homeScore ?? raw?.homeScore ?? 0),
+    awayScore: Number(play?.awayScore ?? raw?.awayScore ?? 0),
+    sortKey: Number.isFinite(sortKey) ? sortKey : fallbackSort,
+  };
+}
+
+function parseClockSort(clock: string): number | undefined {
+  const m = clock.match(/^(\d+)(?:'\+(\d+))?/);
+  if (!m) return undefined;
+  return (Number(m[1]) * 60) + Number(m[2] ?? 0);
+}
+
+function inferPlayType(text: string): string {
+  if (/goal/i.test(text)) return 'Goal';
+  if (/attempt saved/i.test(text)) return 'Shot On Target';
+  if (/attempt blocked/i.test(text)) return 'Shot Blocked';
+  if (/attempt missed|misses/i.test(text)) return 'Shot Off Target';
+  if (/corner/i.test(text)) return 'Corner Awarded';
+  if (/handball/i.test(text)) return 'Handball';
+  if (/offside/i.test(text)) return 'Offside';
+  if (/foul|free kick/i.test(text)) return 'Foul';
+  if (/substitution/i.test(text)) return 'Substitution';
+  return '';
+}
+
+export function extractEspnPlaysFromSummary(json: any): EspnPlay[] {
+  const byId = new Map<string, EspnPlay>();
+  const add = (raw: any, fallbackSort: number) => {
+    const play = playFromRaw(raw, fallbackSort);
+    if (!play) return;
+    const prev = byId.get(play.id);
+    if (!prev || (!prev.text && play.text) || play.sortKey! >= (prev.sortKey ?? 0)) {
+      byId.set(play.id, play);
+    }
+  };
+
+  (json?.commentary ?? []).forEach((p: any, i: number) => add(p, i));
+  (json?.keyEvents ?? []).forEach((p: any, i: number) => add(p, 10_000 + i));
+
+  return [...byId.values()].sort((a, b) => {
+    const byTime = (a.sortKey ?? 0) - (b.sortKey ?? 0);
+    if (byTime !== 0) return byTime;
+    return String(a.id).localeCompare(String(b.id));
+  });
 }
 
 function teamMatches(teamA: string, queryLower: string): boolean {
@@ -778,17 +990,22 @@ function teamMatches(teamA: string, queryLower: string): boolean {
   return false;
 }
 
-function httpGetJson(url: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { 'User-Agent': 'WorldCupBuddy/1.0' } }, res => {
-      let body = '';
-      res.on('data', chunk => (body += chunk));
-      res.on('end', () => {
-        try { resolve(JSON.parse(body)); }
-        catch (e) { reject(e); }
-      });
+async function httpGetJson(url: string): Promise<any> {
+  // Use Electron's net.fetch() — goes through Chromium's network stack,
+  // respects session proxy settings configured via session.setProxy().
+  // This ensures proxy configuration applies to ALL requests uniformly.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await net.fetch(url, {
+      headers: { 'User-Agent': 'WorldCupBuddy/1.0' },
+      signal: controller.signal,
     });
-    req.on('error', reject);
-    req.setTimeout(8000, () => { req.destroy(new Error('timeout')); });
-  });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }

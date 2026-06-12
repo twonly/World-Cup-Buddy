@@ -13,3 +13,4 @@ REPORT-*.md
 tools/
 test/matchday-smoke-cron.sh
 tmp/
+.workbuddy/
