@@ -53,6 +53,7 @@ jobs:
             release/*.yml
             release/*.blockmap
           fail_on_unmatched_files: false
+          body_path: RELEASE_NOTES.md
           draft: false
           prerelease: false
         env:

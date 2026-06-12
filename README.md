@@ -11,12 +11,22 @@
 - **macOS** (Apple Silicon): `WorldCup-Buddy-x.y.z-mac-arm64.dmg`
 - **Windows** (x64): `WorldCup-Buddy-x.y.z-win-x64.exe` (portable, 双击即用)
 
-### macOS 装好提示"已损坏"?
+### macOS 打不开 / 提示 Apple 无法验证?
 
-未签名所以系统多疑。终端跑一行:
+当前 macOS 版还没有 Apple Developer ID 签名和 notarization,从 GitHub 下载后 macOS Gatekeeper 可能提示:
+
+> Apple 无法验证 "World Cup Buddy" 是否包含可能危害 Mac 安全或泄漏隐私的恶意软件。
+
+这是未签名开源小工具常见的拦截,不是下载坏了。请先把 app 从 DMG 拖到"应用程序",然后在终端执行:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/World Cup Buddy.app"
+```
+
+再重新打开。如果你直接在 Downloads 里运行,把路径换成:
+
+```bash
+xattr -dr com.apple.quarantine "$HOME/Downloads/World Cup Buddy.app"
 ```
 
 ### Windows SmartScreen 警告?
