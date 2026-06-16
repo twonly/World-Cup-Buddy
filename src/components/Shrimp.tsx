@@ -371,18 +371,20 @@ export function Shrimp() {
                     {keyEvents.map(ev => {
                       const isGoal = ev.type !== 'yellow' && ev.type !== 'red';
                       const name = ev.player || EVENT_LABEL[ev.type];
-                      const clk = <span className="tl-clk">{ev.clock || '?'}</span>;
-                      const ic = <span className="tl-ic" aria-hidden>{EVENT_ICON[ev.type]}</span>;
-                      const nm = <span className="tl-name" title={ev.teamName}>{name}</span>;
-                      const content = ev.side === 'my' ? <>{nm}{ic}{clk}</> : <>{clk}{ic}{nm}</>;
+                      const entry = (
+                        <div className="tl-entry">
+                          <span className="tl-name" title={`${ev.player ?? EVENT_LABEL[ev.type]}${ev.teamName ? ' · ' + ev.teamName : ''}`}>{name}</span>
+                          <span className="tl-meta">{EVENT_ICON[ev.type]} {ev.clock || '?'}</span>
+                        </div>
+                      );
                       const node = isGoal && ev.score
                         ? <span className="tl-score">{ev.score}</span>
                         : <span className={`tl-node ${ev.type}`} />;
                       return (
                         <div key={ev.id} className={`tl-row ${ev.side}`}>
-                          <div className="tl-side left">{ev.side === 'my' && content}</div>
+                          <div className="tl-side left">{ev.side === 'my' && entry}</div>
                           <div className="tl-mid">{node}</div>
-                          <div className="tl-side right">{ev.side === 'opp' && content}</div>
+                          <div className="tl-side right">{ev.side === 'opp' && entry}</div>
                         </div>
                       );
                     })}
