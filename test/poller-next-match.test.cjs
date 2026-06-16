@@ -388,3 +388,15 @@ test('buildKeyEventsFromPlays: real penalty (type "Goal - Penalty") classified a
   assert.equal(pk.player, 'Alvaro Morata');
   assert.equal(pk.score, '2-0');
 });
+
+test('buildKeyEventsFromPlays: assigns my/opp side from the event team (timeline columns)', () => {
+  const out = poller.buildKeyEventsFromPlays(KE_PLAYS, true, 'Iran', 'New Zealand');
+  assert.equal(out.find(e => e.id === 'g1').side, 'opp');  // New Zealand goal → opp column
+  assert.equal(out.find(e => e.id === 'c1').side, 'my');   // Iran yellow → my column
+});
+
+test('buildKeyEventsFromPlays: side handles ESPN name variants ("IR Iran" vs "Iran")', () => {
+  const plays = [{ id: 'x', typeText: 'Yellow Card', scoringPlay: false, teamName: 'IR Iran', clock: "10'", text: 'Foo (IR Iran) booked.' }];
+  const out = poller.buildKeyEventsFromPlays(plays, true, 'Iran', 'New Zealand');
+  assert.equal(out[0].side, 'my');
+});

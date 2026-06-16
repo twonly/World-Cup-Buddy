@@ -61,7 +61,8 @@ export type KeyEventDisplay = {
   clock: string;
   player: string | null;
   teamName?: string;
-  score?: string;   // running score after a goal, in my-opp order (e.g. "1-0"); undefined for cards
+  side: 'my' | 'opp';   // which team's column (TV-style center-axis timeline)
+  score?: string;       // running score after a goal, in my-opp order (e.g. "1-0"); undefined for cards
 };
 
 export async function getCurrentMatchKeyEvents(): Promise<KeyEventDisplay[]> {
@@ -69,15 +70,18 @@ export async function getCurrentMatchKeyEvents(): Promise<KeyEventDisplay[]> {
   if (!snap) return [];
   let plays: EspnPlay[] = [];
   try { plays = await fetchEspnPlays(snap.matchId); } catch { return []; }
-  return buildKeyEventsFromPlays(plays, snap.myIsHome);
+  return buildKeyEventsFromPlays(plays, snap.myIsHome, snap.myTeam, snap.oppTeam);
 }
 
 /**
  * Pure mapping from ESPN plays → display key events (goals + cards). Exported so it can
  * be unit-tested against real ESPN fixtures without the Electron net layer. ESPN keyEvents
  * carry no athletesInvolved and no running score, so both are parsed out of `text`.
+ * `side` places the event under its team's column; `myTeam`/`oppTeam` are the full names.
  */
-export function buildKeyEventsFromPlays(plays: EspnPlay[], myIsHome: boolean): KeyEventDisplay[] {
+export function buildKeyEventsFromPlays(
+  plays: EspnPlay[], myIsHome: boolean, myTeam = '', oppTeam = '',
+): KeyEventDisplay[] {
   return plays.filter(isKeyEventForDisplay).map(p => {
     const type = classifyKeyEventType(p);
     const isCard = type === 'yellow' || type === 'red';
@@ -93,7 +97,13 @@ export function buildKeyEventsFromPlays(plays: EspnPlay[], myIsHome: boolean): K
         score = `${my}-${opp}`;
       }
     }
-    return { id: p.id, type, clock: p.clock, player, teamName: p.teamName, score };
+    const team = (p.teamName ?? '').toLowerCase();
+    let side: 'my' | 'opp' = 'my';
+    if (team) {
+      if (oppTeam && teamMatches(oppTeam, team)) side = 'opp';
+      else if (myTeam && teamMatches(myTeam, team)) side = 'my';
+    }
+    return { id: p.id, type, clock: p.clock, player, teamName: p.teamName, side, score };
   });
 }
 

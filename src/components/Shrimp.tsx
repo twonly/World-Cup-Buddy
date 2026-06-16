@@ -27,7 +27,15 @@ type KeyEvent = {
   clock: string;
   player: string | null;
   teamName?: string;
+  side: 'my' | 'opp';
   score?: string;
+};
+
+const EVENT_ICON: Record<KeyEvent['type'], string> = {
+  goal: '⚽', penalty: '🥅', 'own-goal': '🙃', yellow: '🟨', red: '🟥',
+};
+const EVENT_LABEL: Record<KeyEvent['type'], string> = {
+  goal: '进球', penalty: '点球', 'own-goal': '乌龙球', yellow: '黄牌', red: '红牌',
 };
 
 type ScoreState = {
@@ -311,18 +319,32 @@ export function Shrimp() {
               {keyEvents.length === 0 ? (
                 <div className="event-empty">暂无关键事件</div>
               ) : (
-                keyEvents.map(ev => {
-                  const icon = ev.type === 'yellow' ? '🟨' : ev.type === 'red' ? '🟥' : ev.type === 'own-goal' ? '🙃' : ev.type === 'penalty' ? '🥅' : '⚽';
-                  const label = ev.type === 'yellow' ? '黄牌' : ev.type === 'red' ? '红牌' : ev.type === 'own-goal' ? '乌龙球' : ev.type === 'penalty' ? '点球' : '进球';
-                  return (
-                    <div key={ev.id} className={`event-row event-${ev.type}`}>
-                      <span className="event-icon" aria-hidden>{icon}</span>
-                      <span className="event-clock">{ev.clock || '?'}</span>
-                      <span className="event-player" title={ev.teamName}>{ev.player || label}</span>
-                      {ev.score && <span className="event-score">{ev.score}</span>}
-                    </div>
-                  );
-                })
+                <div className="tl">
+                  <div className="tl-head">
+                    <span className="tl-team my">{score.myTeamAbbr || '主'}</span>
+                    <span className="tl-team opp">{score.oppTeamAbbr || '客'}</span>
+                  </div>
+                  <div className="tl-body">
+                    {keyEvents.map(ev => {
+                      const isGoal = ev.type !== 'yellow' && ev.type !== 'red';
+                      const name = ev.player || EVENT_LABEL[ev.type];
+                      const clk = <span className="tl-clk">{ev.clock || '?'}</span>;
+                      const ic = <span className="tl-ic" aria-hidden>{EVENT_ICON[ev.type]}</span>;
+                      const nm = <span className="tl-name" title={ev.teamName}>{name}</span>;
+                      const content = ev.side === 'my' ? <>{nm}{ic}{clk}</> : <>{clk}{ic}{nm}</>;
+                      const node = isGoal && ev.score
+                        ? <span className="tl-score">{ev.score}</span>
+                        : <span className={`tl-node ${ev.type}`} />;
+                      return (
+                        <div key={ev.id} className={`tl-row ${ev.side}`}>
+                          <div className="tl-side left">{ev.side === 'my' && content}</div>
+                          <div className="tl-mid">{node}</div>
+                          <div className="tl-side right">{ev.side === 'opp' && content}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               )}
             </div>
           )}
