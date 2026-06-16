@@ -55,6 +55,48 @@ let possessionHistory = new Map<string, number[]>();
 export function getCurrentScore(): ScoreState | null { return currentScore; }
 export function getCurrentPossession(): number[] { return [...currentPossession]; }
 
+export type KeyEventDisplay = {
+  id: string;
+  type: 'goal' | 'yellow' | 'red' | 'penalty' | 'own-goal';
+  clock: string;
+  player: string | null;
+  teamName?: string;
+  score?: string;   // running score after a goal, in my-opp order (e.g. "1-0"); undefined for cards
+};
+
+export async function getCurrentMatchKeyEvents(): Promise<KeyEventDisplay[]> {
+  const snap = currentScore;
+  if (!snap) return [];
+  let plays: EspnPlay[] = [];
+  try { plays = await fetchEspnPlays(snap.matchId); } catch { return []; }
+  return buildKeyEventsFromPlays(plays, snap.myIsHome);
+}
+
+/**
+ * Pure mapping from ESPN plays → display key events (goals + cards). Exported so it can
+ * be unit-tested against real ESPN fixtures without the Electron net layer. ESPN keyEvents
+ * carry no athletesInvolved and no running score, so both are parsed out of `text`.
+ */
+export function buildKeyEventsFromPlays(plays: EspnPlay[], myIsHome: boolean): KeyEventDisplay[] {
+  return plays.filter(isKeyEventForDisplay).map(p => {
+    const type = classifyKeyEventType(p);
+    const isCard = type === 'yellow' || type === 'red';
+    const player = isCard ? parseCardPlayer(p.text)
+      : type === 'own-goal' ? (parseOwnGoalPlayer(p.text) ?? parseScorer(p.text))
+      : parseScorer(p.text);
+    let score: string | undefined;
+    if (!isCard) {
+      const sc = parseGoalScore(p.text);
+      if (sc) {
+        const my = myIsHome ? sc.home : sc.away;
+        const opp = myIsHome ? sc.away : sc.home;
+        score = `${my}-${opp}`;
+      }
+    }
+    return { id: p.id, type, clock: p.clock, player, teamName: p.teamName, score };
+  });
+}
+
 // ---- Proxy support ----
 // The poller uses Electron's net.fetch() which goes through Chromium's network stack.
 // Proxy is configured via session.setProxy() in main.ts — applies to ALL requests
@@ -967,6 +1009,46 @@ export function neutralKeyEvent(
 function parseScorer(text: string): string | null {
   const m = text.match(/\.\s+([A-ZÀ-Ž][\p{L}'.\-]+(?:\s+[A-ZÀ-Ž][\p{L}'.\-]+){0,3})\s*\(/u);
   return m ? m[1] : null;
+}
+
+function isKeyEventForDisplay(p: EspnPlay): boolean {
+  const type = p.typeText.toLowerCase();
+  // Goals (penalty goals are scoringPlay too) + bookings only. We deliberately drop
+  // standalone "penalty awarded/missed" events — they'd masquerade as goals in the list.
+  return p.scoringPlay || /yellow card|red card|second yellow/i.test(type);
+}
+
+function classifyKeyEventType(p: EspnPlay): KeyEventDisplay['type'] {
+  const type = p.typeText.toLowerCase();
+  const text = p.text.toLowerCase();
+  if (/second yellow|red card/i.test(type)) return 'red';
+  if (/yellow card/i.test(type)) return 'yellow';
+  if (/own goal/i.test(type) || /own goal/i.test(text)) return 'own-goal';
+  // Penalty must come from the play TYPE only — goal descriptions say "from the penalty
+  // area", which would otherwise misclassify ordinary goals as penalties.
+  if (/penalt/i.test(type)) return 'penalty';
+  return 'goal';
+}
+
+// Card text leads with the booked player: "Sergio Ramos (Spain) is shown the yellow card…".
+// Falls back to the first "Name (" anywhere (e.g. "Second yellow card to Player (Team)").
+function parseCardPlayer(text: string): string | null {
+  const m = text.match(/^([A-ZÀ-Ž][\p{L}'.\-]+(?:\s+[A-ZÀ-Ž][\p{L}'.\-]+){0,3})\s*\(/u)
+        ?? text.match(/([A-ZÀ-Ž][\p{L}'.\-]+(?:\s+[A-ZÀ-Ž][\p{L}'.\-]+){0,3})\s*\(/u);
+  return m ? m[1].trim() : null;
+}
+
+// Own goals read "Own Goal by Mohamed Hany, Egypt. …" — different shape from a normal goal.
+function parseOwnGoalPlayer(text: string): string | null {
+  const m = text.match(/own goal by ([A-ZÀ-Ž][\p{L}'.\- ]+?),/iu);
+  return m ? m[1].trim() : null;
+}
+
+// Goal text embeds the running score in "<home> N, <away> M." form. Works for normal goals
+// ("Goal! IR Iran 0, New Zealand 1. …") and own goals ("… Belgium 1, Egypt 1.").
+function parseGoalScore(text: string): { home: number; away: number } | null {
+  const m = text.match(/(\d+),\s+\D+?\s(\d+)\./);
+  return m ? { home: Number(m[1]), away: Number(m[2]) } : null;
 }
 
 /** Parse ESPN scoreboard JSON response into typed EspnEvent[]. Shared by current-day and future-date queries. */

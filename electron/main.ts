@@ -2,7 +2,7 @@ import { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, di
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
-import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, type GameEvent, type ScoreState } from './poller';
+import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, getCurrentMatchKeyEvents, type GameEvent, type ScoreState } from './poller';
 import { listPacks, ensureCharactersDir, charactersDir, packById, seedBuiltinPacks, DEFAULT_PACK_ID } from './characters';
 import { buildSessionProxyConfig, proxyAuthForInput, type ProxyAuth, type ProxyMode } from './proxy';
 
@@ -33,7 +33,7 @@ process.on('uncaughtException', (err: NodeJS.ErrnoException) => {
 
 // Tray icon, embedded so it never depends on disk paths inside an asar bundle.
 const TRAY_ICON_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAACwAAAAsCAYAAAAehFoBAAABo0lEQVR4nNXZwXXDIAwA0Fw4doEefezNh67hDTxBJ8oG2YB1ukMGUPGL36vAAiQsEaP3dEn8nB8iiwC3m1IAgAs5h1xCrnsu+2tO63NOxY7ywI/t2rU3cgr5ECBzsd1jsoS6IvTnu5xluG7JwOunlyNleJ1SCTe6q0Hr8PtZrDeBluH+2lgN9KEMrLE0mlcekD5gvbA0uvwgwqt1vQ9Lo/MtD3CfLd3w+UunDfqRw06s0aWAFug4jjMia3RrKDv0cZSro8vFaKJR5DvDWUjhuq/PjyiF6BWDPQvMHRkbsOeXwzXAcOy9GrWpXRIx2m3guRe4Of9j3sALC8zBWGBj8MLrEBTKeuKgwascnAJrWI3pOwHzS0KSuS/VAk9KgvfQtWIl79XBM7+ttYBb38+DHX/i0MJKr0Mhm5rfD46mZnmn6A+Ol0tqZaEJpspBvDzSQMtHl/wDz1siScBn2loc9KahySi3Thyl0UVg/WV+ywwXR3lnE0baSEHocbaqEHqczcDuaA0sQo+zoY3Q4xwZIPQ4hzIJfIxjrwz++geLuYBOR7d/OzOLeNrHweMAAAAASUVORK5CYII=';
+  'iVBORw0KGgoAAAANSUhEUgAAABYAAAAWCAYAAADEtGw7AAAFO0lEQVR4nJWVW2wc1R3Gf+fMzM6ud702ybK2k5qQ2CG2wUBKUhJF4RJF3BEIBAKpVOKBiwQSohWCVi0vSEio6lul0juqVKkikQqEXoAISCAkhgBJLHBi1uDE6/i29u56vbuzM3PmVDNr7OSx52VG/3Pm+39zzne+T4DQfD+EQAiBDhT/zxDSAA1aB6u1EFgsg34/YbZ1kMx0IkwLdFgPm4no42it1gg0wldUizO4S5PLvCRaN3maXAAq2zrZ+viL9NywB7stjS00ATEMYTXBm0wiUFO4NBSoxTr5T45w5A+/wJkfXwEXQsiohWhZw55X9tG/82rai6O01Isc9buJCRPLskEKkBEHAnwq2uEmO89CYg3lzCCl46Psf+IOvPJU1NpEGmjlccU9T7N+4ArOnj7NA6X9nPI7qKXX46savhlgxCQKFVGWukEJj1b/JLvMAr+sGsSu2UT2oWfIv/o8wpCYKB9pJMgM7KIn5jNSqTKbGyWdFTwq/81vyzto2Jp6CJTQNFSA1FV+1vYFqjZPuTTOtJrgTEOzefdOjL8kUW4VqdFY8Uuo+0n2dKXY1dvDm+PtdJwb4tzoGBNzkJAOP+ww+fXeH9DX6pKbLDPzbZ6u8RO8cdbm64lF4vMzxFoMjNb21cML5eLXDXL5BrdcZfPfW7fw2oHzDG5w+MndFe69sp/t2W6oO+Svs6ik5ygMVfjzmGTk+nX8fPMw79f7KHkpMOUqsNISIzDpSseYW5hmxBuh965tiO3rqJvDHMu5HPjyc2Ydh6NOnkaqweL1W5jKdPBgYpQn4pcyYTQ4VGsgjEiQ4Tk39VepBHw3vYj0kmxy++i92uJYcYz5nI/vuVyVuYS9l3XzWPcgW9w0XxenMNa1knbaKWqD0yUfbdbQTcLLW4HAqUmGcosMZNq4sj/Lx+Mfc3/6Fp7ZfRuJ1iSEt1EHBErxiHsdvzn+Li+d/JRjl16GMVPgy/mAdQMewYXAAYK4bfLhiSLZZJUj1il6vX6euvZODg6P0p1N0395J55S1F2PUqXKk1tvZih/joNzdQ4VulBZF8fywou6uhWhMqQtWajC7z+YYGy6xt71Wxk+l+fZl//G398+ip1MYAjBP975jLc+OolHQN/aTqpTi5SRyFRAIL0V64kYaxHQsALspEW1HsctS6qOi0gJCsUKHWvTLMwVmZhZ4PYdfcRsiy/Gprm2cxPbe3xOFebxQqlZze26iLFvCHToOXWBqmQ5lD+NHW/hP6/+lLt2D3Lg8AmGcxMICfsOf4VX0zyybQeZ8w6tyiPeJrENPzKqVca+A76JIUIdljEmezncmmPDmWH2bujBrTQY2NyN43uMTJe478atZNpbcJXHbdt7MAvjjHXZ1DwX3fCawEIY6HoBPTdJcs02nEQN5ShK3yj+6J1haKnEYCbLGtOkvFRhbTrBV9/N8Kd9B3npuQcY2LmJ+SWDs+4U4psiwUIp8nQz+rfAY+H479j48H7iugMvCcqXLE0afDI/zbHUOC2WRtVrxHzFjzZuYVa6HJjKYbUkOKXmiHVmKb7+T/BcMMxloxehhypSN75A5s5fUTNdKnKBhiyCO4t2Cmh3EYQLpktLNs7lfV3YKUUjHmDHTWb++h7nX34t8urIj5v6EE2j1Qpz402kdv0YNvbipiW+XUeYNYRsIEwX0/YwDBfwiEuFNTNL+V+HWXz3SNPkVxJmJfPCvAuZ+8upZSGMWLNhaPLhc3lp+BppyffRnrMaS8ugK5l3cTIazfyJAvXiqeXEu6AuIlOPKmo1SMPC/wBGM2PNjKPCRQAAAABJRU5ErkJggg==';
 
 const isDev = process.env.NODE_ENV === 'development';
 const isMac = process.platform === 'darwin';
@@ -383,7 +383,7 @@ function buildTray() {
   const trayImage = img.resize({ width: 22, height: 22 });
   tray = new Tray(trayImage);
   // tray.setTitle() is macOS-only — adds visible text next to the menu bar icon.
-  if (isMac) tray.setTitle(' 🦐');
+  if (isMac) tray.setTitle(' ⚽');
   // On Windows, left-click the tray icon to toggle the shrimp (no Dock to fall back to)
   if (isWin) {
     tray.on('click', () => toggleShrimp());
@@ -395,19 +395,19 @@ function rebuildTrayMenu() {
   if (!tray) return;
   const cfg = loadConfig();
   const menu = Menu.buildFromTemplate([
-    { label: `🦐 世界杯 Buddy  ·  ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'}`, enabled: false },
+    { label: `⚽ 世界杯 Buddy  ·  ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'}`, enabled: false },
     { type: 'separator' },
-    { label: `🙈 显示/隐藏虾仔（${HOTKEY_LABEL}）`, click: () => toggleShrimp() },
+    { label: `🙈 显示/隐藏 Buddy（${HOTKEY_LABEL}）`, click: () => toggleShrimp() },
     { label: '⚙️ 设置', click: () => createSettingsWindow() },
     { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },
     { label: '⚽ 看看赛况', click: () => { showMatchInfo().catch(() => {}); } },
     { label: '🔄 检查更新', click: () => manualCheckForUpdates() },
     { type: 'separator' },
-    { label: '🦐💔 含泪告别（退出）', click: () => app.quit() },
+    { label: '⚽💔 含泪告别（退出）', click: () => app.quit() },
   ]);
   tray.setToolTip(isWin
     ? `世界杯 Buddy · ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'} · 左键显示/隐藏`
-    : '世界杯 Buddy（双击虾仔即可退出）');
+    : '世界杯 Buddy（双击 Buddy 即可退出）');
   tray.setContextMenu(menu);
 }
 
@@ -443,7 +443,7 @@ function toggleShrimp() {
 
 function hideShrimpWithTip() {
   if (!shrimpWindow || !shrimpWindow.isVisible()) return;
-  showBubble(`🙈 虾仔藏好啦！${HOTKEY_LABEL} 召回 / 或点 Dock 上的虾仔`, 'sleep', 4500);
+  showBubble(`🙈 Buddy 藏好啦！${HOTKEY_LABEL} 召回 / 或点 Dock 上的 Buddy`, 'sleep', 4500);
   setTimeout(() => {
     if (shrimpWindow?.isVisible()) {
       shrimpWindow.hide();
@@ -455,7 +455,7 @@ function hideShrimpWithTip() {
 // Football-only fallbacks for when a click finds nothing new from the API.
 // Kept deliberately plain — no work/rest small talk.
 const NO_NEWS_TIPS: { mood: string; message: string }[] = [
-  { mood: 'watch', message: '⚽ 暂时没有新资讯,虾仔继续盯着赛场' },
+  { mood: 'watch', message: '⚽ 暂时没有新资讯，Buddy 继续盯着赛场' },
   { mood: 'idle', message: '🥅 场上暂时风平浪静,有动静马上喊你' },
   { mood: 'watch', message: '📡 刚刷新过了,还没有新的比赛动态' },
 ];
@@ -464,7 +464,7 @@ const NO_NEWS_TIPS: { mood: string; message: string }[] = [
 const SEARCHING_TIPS: string[] = [
   '📡 正在连线赛场,稍等…',
   '🔭 望远镜对准球门,马上来…',
-  '🏃 虾仔跑去问边裁了,稍等…',
+  '🏃 Buddy 跑去问边裁了，稍等…',
   '🎙️ 正在连线解说席…',
   '🛰️ 卫星对准球场,信号马上回来…',
   '⏱️ 刷新比分中,等我两秒…',
@@ -579,7 +579,7 @@ async function saveDailyCard(): Promise<string | null> {
       myTeam: my, oppTeam: '—',
       myScore: 0, oppScore: 0,
       date: new Date().toLocaleDateString('zh-CN'),
-      highlight: '今天还没开赛,虾仔先打个盹~',
+      highlight: '今天还没开赛，Buddy 先打个盹~',
       mood: 'watch',
       todayMs: getTodayMs(), sessionMs: getSessionMs(),
     };
@@ -646,7 +646,7 @@ app.whenReady().then(async () => {
 
   // Welcome bubble so the user has a visible confirmation it launched
   setTimeout(() => {
-    showBubble(`🦐 虾仔上岗啦！按 ${HOTKEY_LABEL} 可以随时召回我`, 'flag', 6000);
+    showBubble(`⚽ Buddy 上岗啦！按 ${HOTKEY_LABEL} 可以随时召回我`, 'flag', 6000);
   }, 1200);
 
   startPoller({
@@ -694,6 +694,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('teams:list', async () => getKnownTeams());
   ipcMain.handle('teams:aliases', async () => getTeamAliases());
+  ipcMain.handle('score:keyEvents', async () => getCurrentMatchKeyEvents());
   ipcMain.handle('shrimp:drag', (_e, dx: number, dy: number) => {
     if (!shrimpWindow) return;
     const [x, y] = shrimpWindow.getPosition();
@@ -705,14 +706,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('card:save', () => saveDailyCard());
   ipcMain.handle('shrimp:contextMenu', () => {
     const menu = Menu.buildFromTemplate([
-      { label: '🦐 世界杯 Buddy', enabled: false },
+      { label: '⚽ 世界杯 Buddy', enabled: false },
       { type: 'separator' },
       { label: '⚙️ 设置', click: () => createSettingsWindow() },
       { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },
       { label: '⚽ 看看赛况', click: () => { showMatchInfo().catch(() => {}); } },
       { label: `🙈 藏起来一会儿（${HOTKEY_LABEL} 召回）`, click: () => hideShrimpWithTip() },
       { type: 'separator' },
-      { label: '🦐💔 含泪告别（退出）', click: () => app.quit() },
+      { label: '⚽💔 含泪告别（退出）', click: () => app.quit() },
     ]);
     if (shrimpWindow) menu.popup({ window: shrimpWindow });
   });
@@ -722,11 +723,11 @@ app.whenReady().then(async () => {
     const parent = shrimpWindow ?? settingsWindow ?? undefined;
     const opts: Electron.MessageBoxOptions = {
       type: 'question',
-      buttons: ['🦐💔 含泪告别', '不行，再陪我一会'],
+      buttons: ['⚽💔 含泪告别', '不行，再陪我一会'],
       defaultId: 1,
       cancelId: 1,
       title: '世界杯 Buddy',
-      message: '虾仔: 你今天对我可真好 🥺',
+      message: 'Buddy: 你今天对我可真好 🥺',
       detail: `本次陪伴：${sessionStr}\n今日累计：${todayStr}\n\n真的要退出吗？`,
     };
     const result = parent

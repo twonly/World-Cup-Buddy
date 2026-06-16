@@ -1,5 +1,5 @@
 #!/bin/bash
-# 球迷虾仔 一键启动脚本
+# 世界杯 Buddy 一键启动脚本
 # 用法: ./start.sh
 
 set -e

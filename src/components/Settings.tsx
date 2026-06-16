@@ -121,7 +121,7 @@ export function Settings() {
               {p.frames.idle && !p.builtin ? (
                 <img src={p.frames.idle} alt="" className="pack-preview" />
               ) : (
-                <span className="pack-preview emoji">🦐</span>
+                <span className="pack-preview emoji">⚽</span>
               )}
               <span className="pack-name">{p.name}</span>
             </button>

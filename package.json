@@ -1,6 +1,6 @@
 {
   "name": "worldcup-buddy",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "世界杯 Buddy — desktop FIFA World Cup 2026 companion for match day",
   "main": "dist-electron/main.js",
   "scripts": {

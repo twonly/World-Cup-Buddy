@@ -323,3 +323,68 @@ test('keyEventToGameEvent: rooting still partisan by default (我方/对方)', (
   const e = poller.keyEventToGameEvent(play, 'Brazil', 'Spain', true, 1, 0);
   assert.equal(e.mood, 'dance');
 });
+
+// ============================================================
+// 6. buildKeyEventsFromPlays — expandable key-event panel (goal/card scorer+time)
+//    Fixtures use the REAL ESPN fifa.world text formats observed on 2026-06-16.
+// ============================================================
+
+const KE_PLAYS = [
+  { id: 'g1', typeText: 'Goal', scoringPlay: true, teamName: 'New Zealand', clock: "7'",
+    text: 'Goal! IR Iran 0, New Zealand 1. Elijah Just (New Zealand) right footed shot from the centre of the box.' },
+  { id: 'c1', typeText: 'Yellow Card', scoringPlay: false, teamName: 'Iran', clock: "89'",
+    text: 'Ehsan Hajisafi (IR Iran) is shown the yellow card for a bad foul.' },
+  { id: 'og', typeText: 'Own Goal', scoringPlay: true, teamName: 'Belgium', clock: "66'",
+    text: 'Own Goal by Mohamed Hany, Egypt. Belgium 1, Egypt 1.' },
+  { id: 'pa', typeText: 'Goal', scoringPlay: true, teamName: 'Spain', clock: "30'",
+    text: 'Goal! Spain 1, France 0. Pedri (Spain) right footed shot from the centre of the penalty area.' },
+  { id: 'pk', typeText: 'Goal - Penalty', scoringPlay: true, teamName: 'Spain', clock: "40'",
+    text: 'Goal! Spain 2, France 0. Alvaro Morata (Spain) converts the penalty with a right footed shot.' },
+  { id: 'corner', typeText: 'Corner', scoringPlay: false, teamName: 'Spain', clock: "12'", text: 'Corner, Spain.' },
+];
+
+test('buildKeyEventsFromPlays: filters to goals + cards only (drops corners etc.)', () => {
+  assert.equal(typeof poller.buildKeyEventsFromPlays, 'function');
+  const out = poller.buildKeyEventsFromPlays(KE_PLAYS, true);
+  assert.equal(out.length, 5, 'corner should be filtered out');
+});
+
+test('buildKeyEventsFromPlays: goal carries scorer + running score', () => {
+  const g = poller.buildKeyEventsFromPlays(KE_PLAYS, true).find(e => e.id === 'g1');
+  assert.equal(g.type, 'goal');
+  assert.equal(g.player, 'Elijah Just');
+  assert.equal(g.clock, "7'");
+  assert.equal(g.score, '0-1');   // myIsHome=true → Iran(home) 0 - NZ(away) 1
+});
+
+test('buildKeyEventsFromPlays: score orients to my-opp when fav is the away side', () => {
+  const g = poller.buildKeyEventsFromPlays(KE_PLAYS, false).find(e => e.id === 'g1');
+  assert.equal(g.score, '1-0');   // myIsHome=false → away 1 - home 0
+});
+
+test('buildKeyEventsFromPlays: yellow card carries the booked player, no score', () => {
+  const c = poller.buildKeyEventsFromPlays(KE_PLAYS, true).find(e => e.id === 'c1');
+  assert.equal(c.type, 'yellow');
+  assert.equal(c.player, 'Ehsan Hajisafi');
+  assert.equal(c.score, undefined);
+});
+
+test('buildKeyEventsFromPlays: own goal — distinct player parse + score', () => {
+  const og = poller.buildKeyEventsFromPlays(KE_PLAYS, true).find(e => e.id === 'og');
+  assert.equal(og.type, 'own-goal');
+  assert.equal(og.player, 'Mohamed Hany');
+  assert.equal(og.score, '1-1');
+});
+
+test('buildKeyEventsFromPlays: "penalty area" goal is NOT misread as a penalty', () => {
+  const pa = poller.buildKeyEventsFromPlays(KE_PLAYS, true).find(e => e.id === 'pa');
+  assert.equal(pa.type, 'goal');
+  assert.equal(pa.player, 'Pedri');
+});
+
+test('buildKeyEventsFromPlays: real penalty (type "Goal - Penalty") classified as penalty', () => {
+  const pk = poller.buildKeyEventsFromPlays(KE_PLAYS, true).find(e => e.id === 'pk');
+  assert.equal(pk.type, 'penalty');
+  assert.equal(pk.player, 'Alvaro Morata');
+  assert.equal(pk.score, '2-0');
+});

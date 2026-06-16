@@ -57,7 +57,7 @@ PNG 规范：
   - 推荐尺寸: 220×220 (与窗口同尺寸；任意尺寸都会被居中缩放)
   - 必须是 PNG 且透明背景
   - 角色应该居中
-  - 缺哪张图就会 fallback 回默认虾仔表情
+  - 缺哪张图就会 fallback 回默认 Buddy 表情
 
 七种心情对应场景：
   idle  - 待机摸鱼
@@ -132,7 +132,7 @@ export function listPacks(): CharacterPack[] {
   const dir = charactersDir();
   const packs: CharacterPack[] = [{
     id: DEFAULT_PACK_ID,
-    name: '🦐 默认虾仔（emoji）',
+    name: '⚽ 默认 Buddy（emoji）',
     builtin: true,
     frames: {},
   }];

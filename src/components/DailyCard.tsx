@@ -45,10 +45,10 @@ export function DailyCard({ data }: { data: CardData }) {
   const won = data.myScore > data.oppScore;
   const moodEmoji = won ? '🎉' : data.myScore === data.oppScore ? '🤝' : '😭';
   const tagline = won
-    ? '虾仔今天笑开花'
+    ? 'Buddy 今天笑开花'
     : data.myScore === data.oppScore
-    ? '虾仔感觉有点暧昧'
-    : '虾仔今天哭哭';
+    ? 'Buddy 感觉有点暧昧'
+    : 'Buddy 今天哭哭';
 
   return (
     <div className="card-stage">
@@ -80,7 +80,7 @@ export function DailyCard({ data }: { data: CardData }) {
         </div>
 
         <div className="card-shrimp">
-          <div className={`big-emoji mood-${data.mood}`}>🦐</div>
+          <div className={`big-emoji mood-${data.mood}`}>⚽</div>
           <div className="big-mood-emoji">{moodEmoji}</div>
         </div>
 
@@ -119,7 +119,7 @@ export function DailyCardRoute({ encoded }: { encoded: string }) {
         oppTeam: 'Brazil',
         myScore: 0,
         oppScore: 0,
-        highlight: '今天没比赛,虾仔陪你工作',
+        highlight: '今天没比赛，Buddy 陪你工作',
         mood: 'cheer',
       });
     }

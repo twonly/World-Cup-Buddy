@@ -2,7 +2,7 @@
 # transparent.sh —— 一键给 characters/ 下所有 PNG 去白底
 #
 # 用法:
-#   ./transparent.sh                              # 处理球迷虾仔自带的 characters 目录
+#   ./transparent.sh                              # 处理世界杯 Buddy 自带的 characters 目录
 #   ./transparent.sh /path/to/source/flags        # 处理自定义目录(导入前清洗)
 #
 # 处理前会自动备份到同级 <dir>_backup_YYYYMMDD_HHMMSS 目录
@@ -13,14 +13,14 @@ set -euo pipefail
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 
 # ---------- 1. 定位目录 ----------
-DEFAULT_DIR="$HOME/Library/Application Support/球迷虾仔/characters"
+DEFAULT_DIR="$HOME/Library/Application Support/World Cup Buddy/characters"
 CHAR_DIR="${1:-$DEFAULT_DIR}"
 
 if [[ ! -d "$CHAR_DIR" ]]; then
   echo "❌ 找不到目录: $CHAR_DIR"
   echo ""
   echo "可能原因:"
-  echo "  1. 还没启动过球迷虾仔(启动一次就会创建)"
+  echo "  1. 还没启动过世界杯 Buddy(启动一次就会创建)"
   echo "  2. 想处理别的目录: ./transparent.sh /your/folder"
   exit 1
 fi
@@ -100,5 +100,5 @@ echo "✅ 成功: $OK 张"
 [[ $FAIL -gt 0 ]] && echo "⚠️  失败: $FAIL 张 (原文件未动)"
 echo "💾 备份在: $BACKUP"
 echo ""
-echo "🦐 重启球迷虾仔即可看到透明效果"
+echo "⚽ 重启世界杯 Buddy 即可看到透明效果"
 echo "   不满意可直接覆盖回备份: cp -R \"$BACKUP\"/* \"$CHAR_DIR\"/"

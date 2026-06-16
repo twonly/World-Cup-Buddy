@@ -3,8 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 type Mood = 'idle' | 'watch' | 'cheer' | 'sad' | 'flag' | 'sleep' | 'dance';
 
 const MOOD_EMOJI: Record<Mood, string> = {
-  idle: '🦐', watch: '🦐', cheer: '🦐', sad: '🦐',
-  flag: '🦐', sleep: '🦐', dance: '🦐',
+  idle: '⚽', watch: '⚽', cheer: '⚽', sad: '⚽',
+  flag: '⚽', sleep: '⚽', dance: '⚽',
 };
 const MOOD_ACCESSORY: Record<Mood, string> = {
   idle: '', watch: '⚽', cheer: '🎉', sad: '💧',
@@ -20,6 +20,15 @@ const MOOD_LABEL: Record<Mood, string> = {
 };
 
 type Pack = { id: string; name: string; builtin?: boolean; frames: Partial<Record<Mood, string>> };
+
+type KeyEvent = {
+  id: string;
+  type: 'goal' | 'yellow' | 'red' | 'penalty' | 'own-goal';
+  clock: string;
+  player: string | null;
+  teamName?: string;
+  score?: string;
+};
 
 type ScoreState = {
   myTeamAbbr: string;
@@ -143,6 +152,8 @@ export function Shrimp() {
   const [possession, setPossession] = useState<number[]>([]);
   const [showPossession, setShowPossession] = useState(true);
   const [now, setNow] = useState(Date.now());
+  const [eventsExpanded, setEventsExpanded] = useState(false);
+  const [keyEvents, setKeyEvents] = useState<KeyEvent[]>([]);
   const dragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({
     dragging: false, lastX: 0, lastY: 0,
   });
@@ -152,6 +163,13 @@ export function Shrimp() {
     const t = window.setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
+
+  // Fetch key events when the scoreboard changes while the event panel is open.
+  useEffect(() => {
+    if (!eventsExpanded || !score) return;
+    const api = (window as any).shrimpAPI;
+    api?.getKeyEvents?.().then((events: KeyEvent[]) => setKeyEvents(events ?? []));
+  }, [eventsExpanded, score]);
 
   useEffect(() => {
     const api = (window as any).shrimpAPI;
@@ -229,6 +247,11 @@ export function Shrimp() {
     (window as any).shrimpAPI?.contextMenu();
   };
 
+  const toggleEvents = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEventsExpanded(prev => !prev);
+  };
+
   const customSrc = pack && !pack.builtin ? pack.frames[mood] : undefined;
   const isCustom = !!customSrc;
 
@@ -256,7 +279,7 @@ export function Shrimp() {
       title="左键戳一下｜双击告别｜右键菜单"
     >
       {score && (
-        <div className="score-stack">
+        <div className={`score-stack ${eventsExpanded ? 'expanded' : ''}`} onClick={toggleEvents} onDoubleClick={e => e.stopPropagation()}>
           <div className={`score-chip status-${score.status.replace('STATUS_','').toLowerCase()}`}>
             {score.myTeamLogo
               ? <img className="logo" src={score.myTeamLogo} alt={score.myTeamAbbr} draggable={false} />
@@ -268,6 +291,7 @@ export function Shrimp() {
               ? <img className="logo" src={score.oppTeamLogo} alt={score.oppTeamAbbr} draggable={false} />
               : <span className="team">{score.oppTeamAbbr}</span>}
             <span className="period">{statusBadge(score, now)}</span>
+            <span className="score-chevron" aria-hidden>{eventsExpanded ? '▲' : '▼'}</span>
           </div>
           {contextLabel && (
             <div className="series-chip">{contextLabel}</div>
@@ -281,6 +305,26 @@ export function Shrimp() {
               myAbbr={score.myTeamAbbr}
               oppAbbr={score.oppTeamAbbr}
             />
+          )}
+          {eventsExpanded && (
+            <div className="events-panel" onClick={e => e.stopPropagation()}>
+              {keyEvents.length === 0 ? (
+                <div className="event-empty">暂无关键事件</div>
+              ) : (
+                keyEvents.map(ev => {
+                  const icon = ev.type === 'yellow' ? '🟨' : ev.type === 'red' ? '🟥' : ev.type === 'own-goal' ? '🙃' : ev.type === 'penalty' ? '🥅' : '⚽';
+                  const label = ev.type === 'yellow' ? '黄牌' : ev.type === 'red' ? '红牌' : ev.type === 'own-goal' ? '乌龙球' : ev.type === 'penalty' ? '点球' : '进球';
+                  return (
+                    <div key={ev.id} className={`event-row event-${ev.type}`}>
+                      <span className="event-icon" aria-hidden>{icon}</span>
+                      <span className="event-clock">{ev.clock || '?'}</span>
+                      <span className="event-player" title={ev.teamName}>{ev.player || label}</span>
+                      {ev.score && <span className="event-score">{ev.score}</span>}
+                    </div>
+                  );
+                })
+              )}
+            </div>
           )}
         </div>
       )}

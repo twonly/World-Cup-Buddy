@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('shrimpAPI', {
   importFlags: () => ipcRenderer.invoke('characters:importFlags'),
   contextMenu: () => ipcRenderer.invoke('shrimp:contextMenu'),
   farewell: () => ipcRenderer.invoke('shrimp:farewell'),
+  getKeyEvents: () => ipcRenderer.invoke('score:keyEvents'),
   testProxy: (mode: string, proxyUrl?: string, proxyBypass?: string) => ipcRenderer.invoke('proxy:test', mode, proxyUrl, proxyBypass),
   onEvent: (cb: (ev: ShrimpEvent) => void) => {
     const listener = (_: any, ev: ShrimpEvent) => cb(ev);

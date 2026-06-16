@@ -27,7 +27,7 @@ export function App() {
 
   if (route === 'bubble') {
     const data = query.get('data');
-    let parsed = { message: '虾仔在看球～', mood: 'watch' };
+    let parsed = { message: 'Buddy 在看球～', mood: 'watch' };
     try { if (data) parsed = JSON.parse(data); } catch {}
     return <Bubble message={parsed.message} mood={parsed.mood} />;
   }
