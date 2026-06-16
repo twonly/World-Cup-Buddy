@@ -69,7 +69,6 @@ PNG 规范：
   dance - 蹦迪（进球 / 胜利狂欢）
 
 提示：可以只画 1 张 idle.png，其他不放，系统会用默认 emoji 顶上。
-也可以只放一张国旗 PNG，系统会自动当作 idle。
 `);
   }
 }
@@ -77,18 +76,6 @@ PNG 规范：
 // Bundled packs that ship inside the app (app.asar in prod, project root in dev).
 export function builtinPacksDir(): string {
   return path.join(app.getAppPath(), 'character-packs');
-}
-
-// A few country display names get a nicer Chinese label out of the box.
-const FLAG_NAME_ZH: Record<string, string> = {
-  argentina: '阿根廷 🇦🇷', brazil: '巴西 🇧🇷', france: '法国 🇫🇷', england: '英格兰',
-  spain: '西班牙 🇪🇸', germany: '德国 🇩🇪', portugal: '葡萄牙 🇵🇹', netherlands: '荷兰 🇳🇱',
-  italy: '意大利 🇮🇹', belgium: '比利时 🇧🇪', croatia: '克罗地亚 🇭🇷', uruguay: '乌拉圭 🇺🇾',
-  mexico: '墨西哥 🇲🇽', usa: '美国 🇺🇸', japan: '日本 🇯🇵', morocco: '摩洛哥 🇲🇦',
-};
-
-function titleize(slug: string): string {
-  return slug.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
 // Copy bundled packs into the user's characters dir on first run. Idempotent:
@@ -99,6 +86,7 @@ export function seedBuiltinPacks(): void {
   try { entries = fs.readdirSync(srcRoot); } catch { return; }
   ensureCharactersDir();
   const destRoot = charactersDir();
+  cleanupSeededFlagPacks(destRoot);
 
   for (const entry of entries) {
     const srcDir = path.join(srcRoot, entry);
@@ -106,7 +94,6 @@ export function seedBuiltinPacks(): void {
     try { stat = fs.statSync(srcDir); } catch { continue; }
     if (!stat.isDirectory()) continue;
 
-    if (entry === '_flags') { seedFlags(srcDir, destRoot); continue; }
     if (entry.startsWith('_')) continue;
 
     // Full multi-mood pack (e.g. brazil) — copy verbatim if not present.
@@ -121,23 +108,22 @@ export function seedBuiltinPacks(): void {
   }
 }
 
-// Turn a flat folder of flag PNGs into single-image (idle-only) packs.
-function seedFlags(srcDir: string, destRoot: string): void {
-  let files: string[] = [];
-  try { files = fs.readdirSync(srcDir); } catch { return; }
-  for (const f of files) {
-    if (!/\.png$/i.test(f)) continue;
-    const slug = f.replace(/\.png$/i, '').replace(/^\d+_?/, '').toLowerCase();
-    const packDir = path.join(destRoot, `flag-${slug}`);
-    if (fs.existsSync(packDir)) continue;
+// Remove old automatically seeded flag-only packs now that full character packs ship.
+function cleanupSeededFlagPacks(destRoot: string): void {
+  let entries: string[] = [];
+  try { entries = fs.readdirSync(destRoot); } catch { return; }
+
+  for (const entry of entries) {
+    if (!entry.startsWith('flag-')) continue;
+
+    const packDir = path.join(destRoot, entry);
+    const metaPath = path.join(packDir, 'pack.json');
     try {
-      fs.mkdirSync(packDir, { recursive: true });
-      fs.copyFileSync(path.join(srcDir, f), path.join(packDir, 'idle.png'));
-      fs.writeFileSync(
-        path.join(packDir, 'pack.json'),
-        JSON.stringify({ name: `🏳️ ${FLAG_NAME_ZH[slug] ?? titleize(slug)}`, author: 'World Cup 2026' }, null, 2),
-      );
-    } catch { /* skip on error */ }
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+      if (meta?.author === 'World Cup 2026' || meta?.author === 'World Cup Flags') {
+        fs.rmSync(packDir, { recursive: true, force: true });
+      }
+    } catch { /* leave user-created folders alone */ }
   }
 }
 

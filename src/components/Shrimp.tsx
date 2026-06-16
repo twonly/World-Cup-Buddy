@@ -110,21 +110,25 @@ function playMoodSound(mood: Mood) {
   }
 }
 
-// Sparkline as inline SVG path. data: array of 0..1 values.
-function PossessionSparkline({ data, pct }: { data: number[]; pct?: number }) {
-  if (!data.length) return null;
-  const w = 86, h = 16;
-  const stepX = w / Math.max(1, data.length - 1);
-  const pts = data.map((v, i) => `${(i * stepX).toFixed(1)},${((1 - v) * (h - 2) + 1).toFixed(1)}`).join(' ');
-  const lastY = (1 - data[data.length - 1]) * (h - 2) + 1;
-  const lastPct = Math.round(pct ?? data[data.length - 1] * 100);
+// Two-sided possession bar. Labels each side with its team abbreviation so it's
+// always clear which team owns which share — no need to remember who is "home".
+function PossessionBar({
+  data, myPct, oppPct, myAbbr, oppAbbr,
+}: {
+  data: number[]; myPct?: number; oppPct?: number; myAbbr: string; oppAbbr: string;
+}) {
+  // Prefer the explicit per-team percentage; fall back to the trend's last point.
+  const my = Math.round(myPct ?? (data.length ? data[data.length - 1] * 100 : 50));
+  const opp = Math.round(oppPct ?? (100 - my));
+  const total = my + opp || 100;
   return (
-    <div className="possession">
-      <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`}>
-        <polyline points={pts} fill="none" stroke="#fde047" strokeWidth="1.5" strokeLinejoin="round" />
-        <circle cx={(data.length - 1) * stepX} cy={lastY} r="2" fill="#fde047" />
-      </svg>
-      <span className="possession-pct">控球 {lastPct}%</span>
+    <div className="possession" title="控球率">
+      <span className="poss-team my">{myAbbr || '主'}</span>
+      <span className="poss-bar">
+        <span className="poss-fill my" style={{ flexGrow: my / total }}>{my}%</span>
+        <span className="poss-fill opp" style={{ flexGrow: opp / total }}>{opp}%</span>
+      </span>
+      <span className="poss-team opp">{oppAbbr || '客'}</span>
     </div>
   );
 }
@@ -268,8 +272,15 @@ export function Shrimp() {
           {contextLabel && (
             <div className="series-chip">{contextLabel}</div>
           )}
-          {showPossession && possession.length > 1 && score.statusState === 'in' && (
-            <PossessionSparkline data={possession} pct={score.myPossessionPct} />
+          {showPossession && score.statusState === 'in' &&
+            (score.myPossessionPct != null || possession.length > 1) && (
+            <PossessionBar
+              data={possession}
+              myPct={score.myPossessionPct}
+              oppPct={score.oppPossessionPct}
+              myAbbr={score.myTeamAbbr}
+              oppAbbr={score.oppTeamAbbr}
+            />
           )}
         </div>
       )}

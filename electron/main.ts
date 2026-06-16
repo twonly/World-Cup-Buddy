@@ -2,7 +2,7 @@ import { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, di
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
-import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, type GameEvent, type ScoreState } from './poller';
+import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, type GameEvent, type ScoreState } from './poller';
 import { listPacks, ensureCharactersDir, charactersDir, packById, seedBuiltinPacks, DEFAULT_PACK_ID } from './characters';
 import { buildSessionProxyConfig, proxyAuthForInput, type ProxyAuth, type ProxyMode } from './proxy';
 
@@ -626,7 +626,7 @@ app.whenReady().then(async () => {
     app.setAppUserModelId('com.worldcupbuddy.app');
   }
   ensureCharactersDir();
-  seedBuiltinPacks();   // copy bundled 🇧🇷 pack + 48 flag avatars on first run
+  seedBuiltinPacks();   // copy bundled character packs on first run
   const cfg = loadConfig();
 
   // Apply proxy settings before any network requests start
@@ -693,6 +693,7 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('teams:list', async () => getKnownTeams());
+  ipcMain.handle('teams:aliases', async () => getTeamAliases());
   ipcMain.handle('shrimp:drag', (_e, dx: number, dy: number) => {
     if (!shrimpWindow) return;
     const [x, y] = shrimpWindow.getPosition();

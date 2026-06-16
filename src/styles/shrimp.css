@@ -179,19 +179,43 @@ html, body, #root {
 .possession {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   background: rgba(15, 23, 42, 0.6);
   padding: 2px 8px;
   border-radius: 999px;
   pointer-events: none;
 }
-.possession-pct {
+.poss-team {
   font-size: 10px;
-  font-weight: 700;
-  color: #fde047;
-  font-feature-settings: "tnum" 1;
+  font-weight: 800;
+  letter-spacing: 0.3px;
   white-space: nowrap;
 }
+.poss-team.my { color: #fde047; }
+.poss-team.opp { color: #93c5fd; }
+.poss-bar {
+  display: flex;
+  width: 92px;
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.15);
+}
+.poss-fill {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  font-size: 9px;
+  font-weight: 700;
+  color: #0f172a;
+  font-feature-settings: "tnum" 1;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: flex-grow 0.4s ease;
+}
+.poss-fill.my { background: #fde047; }
+.poss-fill.opp { background: #93c5fd; }
 
 /* settings toggles */
 .toggle-row { display: flex; flex-direction: column; gap: 12px; }

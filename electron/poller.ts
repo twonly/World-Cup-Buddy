@@ -200,6 +200,14 @@ let lastGameSnapshot: LastGameSnapshot | null = null;
 export function getLastGameSnapshot(): LastGameSnapshot | null { return lastGameSnapshot; }
 export function getKnownTeams(): string[] { return [...WC_TEAMS]; }
 
+/**
+ * Returns a map of English team name → Chinese/abbr aliases,
+ * used by the Settings UI to support Chinese search input.
+ */
+export function getTeamAliases(): Record<string, string[]> {
+  return { ...TEAM_ALIASES };
+}
+
 export function setFavoriteTeams(teams: string[]) {
   if (currentOptions) currentOptions.favoriteTeams = teams;
   lastSeenGameIds = new Set();
@@ -456,7 +464,7 @@ async function tickLive() {
   let matches: EspnEvent[] = [];
   try { matches = await fetchEspnScoreboard(); } catch { return; }
   if (!matches.length) {
-    announceNoMatch(fav, []);
+    await announceNoMatch(fav, []);
     return;
   }
 
@@ -464,23 +472,37 @@ async function tickLive() {
     fav.some(f => teamMatches(m.home, f) || teamMatches(m.away, f))
   );
 
-  if (relevant.length === 0) {
-    if (currentScore) {
-      currentScore = null;
-      currentOptions.onScore?.(null);
+  // Decide which match(es) to follow (Issue #1):
+  //  - Favorite team playing today → follow those, with partisan 我方/对方 commentary.
+  //  - Otherwise auto-follow the single best World Cup match (live now, or the next one
+  //    once it's within 30 min of kickoff), so the user always sees live match info
+  //    even without picking a team.
+  let followed: EspnEvent[];
+  let rooting: boolean;
+  if (relevant.length > 0) {
+    followed = relevant;
+    rooting = true;
+  } else {
+    const auto = pickAutoFollowMatch(matches);
+    if (!auto) {
+      if (currentScore) { currentScore = null; currentOptions.onScore?.(null); }
+      await announceNoMatch(fav, matches);
+      return;
     }
-    announceNoMatch(fav, matches);
-    return;
+    followed = [auto];
+    rooting = false;
   }
 
-  // Broadcast the BEST current match as the persistent scoreboard.
+  // myIsHome: partisan mode follows the favorite team's side; neutral mode treats home as "my".
+  const myHomeOf = (m: EspnEvent) => rooting ? fav.some(f => teamMatches(m.home, f)) : true;
+
+  // Broadcast the BEST followed match as the persistent scoreboard.
   // Priority: in-progress > finished today > scheduled today.
   const priorityRank = (m: EspnEvent) =>
     m.state === 'in' ? 0 : m.state === 'post' ? 1 : 2;
-  const sorted = [...relevant].sort((a, b) => priorityRank(a) - priorityRank(b));
-  const best = sorted[0];
+  const best = [...followed].sort((a, b) => priorityRank(a) - priorityRank(b))[0];
   if (best) {
-    const bestMyHome = fav.some(f => teamMatches(best.home, f));
+    const bestMyHome = myHomeOf(best);
     const myStats = bestMyHome ? best.homeStats : best.awayStats;
     const oppStats = bestMyHome ? best.awayStats : best.homeStats;
     currentScore = {
@@ -530,10 +552,10 @@ async function tickLive() {
     }
   }
 
-  for (const m of relevant) {
+  for (const m of followed) {
     const prevStatus = lastSeenStatus.get(m.id);
     lastSeenStatus.set(m.id, m.status);
-    const myIsHome = fav.some(f => teamMatches(m.home, f));
+    const myIsHome = myHomeOf(m);
     const myTeam = myIsHome ? m.home : m.away;
     const oppTeam = myIsHome ? m.away : m.home;
     const myScore = myIsHome ? m.homeScore : m.awayScore;
@@ -557,7 +579,7 @@ async function tickLive() {
           ttl: 6000,
         }, m.id);
       } else if (m.state === 'post') {
-        emitFullTime(m, myTeam, oppTeam, myScore, oppScore, myPens, oppPens, myWon, true);
+        emitFullTime(m, myTeam, oppTeam, myScore, oppScore, myPens, oppPens, myWon, true, rooting);
       }
     }
 
@@ -580,7 +602,7 @@ async function tickLive() {
           `🔄 易边再战!`,
         ]), ttl: 5500 }, m.id);
       } else if (m.state === 'post') {
-        emitFullTime(m, myTeam, oppTeam, myScore, oppScore, myPens, oppPens, myWon, false);
+        emitFullTime(m, myTeam, oppTeam, myScore, oppScore, myPens, oppPens, myWon, false, rooting);
       }
     }
 
@@ -596,7 +618,7 @@ async function tickLive() {
       const toEmit = fresh.slice(-3);   // cap to avoid flood after a long gap
       let delay = 600;
       for (const play of toEmit) {
-        const ev = keyEventToGameEvent(play, myTeam, oppTeam, myIsHome, myScore, oppScore);
+        const ev = keyEventToGameEvent(play, myTeam, oppTeam, myIsHome, myScore, oppScore, rooting);
         if (ev) { scheduleEmit(ev, m.id, delay); delay += 4500; }
       }
 
@@ -604,11 +626,11 @@ async function tickLive() {
       if (toEmit.length === 0) {
         const idleMs = Date.now() - (lastEventAt.get(m.id) ?? 0);
         if (idleMs > 180_000) {
-          const lead = myScore > oppScore ? `领先` : myScore < oppScore ? `落后` : '战平';
+          const lead = !rooting ? '' : myScore > oppScore ? ' (领先)' : myScore < oppScore ? ' (落后)' : ' (战平)';
           emit({
             mood: 'watch',
             message: pick([
-              `📊 ${m.clock || phaseLabel(m)} | ${myTeam} ${myScore}-${oppScore} ${oppTeam} (${lead})`,
+              `📊 ${m.clock || phaseLabel(m)} | ${myTeam} ${myScore}-${oppScore} ${oppTeam}${lead}`,
               `👀 还在踢, ${myTeam} ${myScore}-${oppScore} ${oppTeam}`,
             ]),
             ttl: 5500,
@@ -620,25 +642,69 @@ async function tickLive() {
         myTeam, oppTeam, myScore, oppScore,
         date: new Date().toLocaleDateString('zh-CN'),
         highlight: `${myTeam} ${myScore}-${oppScore} ${oppTeam} (${m.clock || phaseLabel(m)})`,
-        mood: myScore >= oppScore ? 'cheer' : 'sad',
+        mood: !rooting ? 'watch' : myScore >= oppScore ? 'cheer' : 'sad',
       };
     }
   }
 }
 
-function announceNoMatch(fav: string[], allMatches: EspnEvent[]) {
+async function announceNoMatch(fav: string[], allMatches: EspnEvent[]) {
   const sentinelKey = 999_000 + new Date().getUTCDate();
   if (lastSeenGameIds.has(sentinelKey)) return;
   lastSeenGameIds.add(sentinelKey);
+
+  const hasFav = fav.length > 0;
   const favName = currentOptions?.favoriteTeams[0] ?? '你的球队';
-  const next = allMatches.find(m => m.state === 'pre' || m.state === 'in');
-  emit({
-    mood: 'idle',
-    message: next
-      ? `🌙 ${favName} 今天不踢~ 世界杯还在打 ${next.home} vs ${next.away}`
-      : `🌙 ${favName} 今天没比赛~ Buddy 陪你摸鱼`,
-    ttl: 6000,
-  }, String(sentinelKey));
+
+  // 1. Find the next scheduled/in-progress match for the favorite team (may be future days).
+  //    Skipped entirely when no team is picked.
+  let nextMatch: EspnEvent | null = null;
+  if (hasFav) {
+    try {
+      nextMatch = await fetchNextMatchForTeam(fav);
+    } catch {
+      // Non-fatal: fall back to old behavior
+    }
+  }
+
+  // 2. Other world cup matches happening right now (for ambient context)
+  const ongoingOther = allMatches.filter(m => m.state === 'in');
+
+  let message: string;
+
+  if (nextMatch) {
+    const myIsHome = fav.some(f => teamMatches(nextMatch!.home, f));
+    const myTeamName = myIsHome ? nextMatch.home : nextMatch.away;
+    const opponent = myIsHome ? nextMatch.away : nextMatch.home;
+    const timeStr = formatMatchTime(nextMatch.utcDate);
+    const ctx = nextMatch.roundName ?? nextMatch.groupName ?? '';
+    const ctxStr = ctx ? ` · ${ctx}` : '';
+
+    if (nextMatch.state === 'in') {
+      // The fav team is actually playing right now on a different day lookup — unlikely but handle it
+      message = `👀 ${myTeamName} 正在踢! vs ${opponent}${ctxStr} — 快看!`;
+    } else {
+      // Upcoming match
+      const timeLabel = timeStr ? ` ${timeStr}` : '';
+      message = `📅 ${myTeamName} 下一场: vs ${opponent}${timeLabel}${ctxStr}`;
+      if (ongoingOther.length > 0) {
+        const others = ongoingOther.slice(0, 2).map(m => `${m.home} vs ${m.away}`).join('、');
+        message += ` | 世界杯正在打: ${others}`;
+      }
+    }
+  } else if (ongoingOther.length > 0) {
+    // No upcoming fav match, but other WC games are live
+    const others = ongoingOther.slice(0, 2).map(m => `${m.home} vs ${m.away}`).join('、');
+    message = hasFav
+      ? `🌙 ${favName} 今天不踢~ 世界杯还在打: ${others}`
+      : `📺 世界杯正在打: ${others}`;
+  } else {
+    message = hasFav
+      ? `🌙 ${favName} 今天没比赛~ Buddy 陪你摸鱼`
+      : `🌙 今天没有世界杯比赛~ Buddy 陪你摸鱼`;
+  }
+
+  emit({ mood: 'idle', message, ttl: 8000 }, String(sentinelKey));
 }
 
 // Full-time / after-extra-time / after-penalties summary.
@@ -647,6 +713,7 @@ function emitFullTime(
   myScore: number, oppScore: number,
   myPens: number | undefined, oppPens: number | undefined,
   myWon: boolean | undefined, firstSighting: boolean,
+  rooting: boolean = true,
 ) {
   const hasPens = myPens !== undefined && oppPens !== undefined;
   // Penalties: ESPN keeps score level, decides via shootout/winner flag.
@@ -659,7 +726,14 @@ function emitFullTime(
 
   let mood: Mood;
   let body: string;
-  if (won) {
+  if (!rooting) {
+    // Neutral viewer — name the actual winner, no 我方/对方 emotion.
+    const winner = won ? myTeam : oppTeam;
+    mood = draw ? 'watch' : 'cheer';
+    body = draw
+      ? `${myTeam} ${myScore}-${oppScore} ${oppTeam}, 平局`
+      : `${myTeam} ${myScore}-${oppScore} ${oppTeam}${pensStr}, ${winner} 胜!`;
+  } else if (won) {
     mood = 'dance';
     body = pick([
       `${myTeam} ${myScore}-${oppScore} ${oppTeam}${pensStr}, 赢了! ⚽🎉`,
@@ -680,10 +754,12 @@ function emitFullTime(
   lastGameSnapshot = {
     myTeam, oppTeam, myScore, oppScore,
     date: new Date().toLocaleDateString('zh-CN'),
-    highlight: won ? `${myTeam} 顶住拿下!${pensStr}` :
-               draw ? `${myTeam} 战平 ${oppTeam}` :
-                      `${myTeam} 惜败 ${oppTeam}${pensStr}`,
-    mood: won ? 'cheer' : draw ? 'watch' : 'sad',
+    highlight: !rooting
+      ? (draw ? `${myTeam} 战平 ${oppTeam}` : `${won ? myTeam : oppTeam} 胜 ${won ? oppTeam : myTeam}${pensStr}`)
+      : won ? `${myTeam} 顶住拿下!${pensStr}`
+      : draw ? `${myTeam} 战平 ${oppTeam}`
+      : `${myTeam} 惜败 ${oppTeam}${pensStr}`,
+    mood: !rooting ? 'watch' : won ? 'cheer' : draw ? 'watch' : 'sad',
   };
 }
 
@@ -720,7 +796,7 @@ export function collectNewKeyEvents(plays: EspnPlay[], lastSeenId: string | unde
 
 export function keyEventToGameEvent(
   play: EspnPlay, myTeam: string, oppTeam: string, myIsHome: boolean,
-  liveMy: number, liveOpp: number,
+  liveMy: number, liveOpp: number, rooting: boolean = true,
 ): GameEvent | null {
   const isMyTeam = play.teamName ? teamMatches(myTeam, play.teamName.toLowerCase()) : false;
   // keyEvents don't always carry per-event score; fall back to live scoreboard score.
@@ -731,6 +807,10 @@ export function keyEventToGameEvent(
   const type = play.typeText.toLowerCase();
   const scorer = parseScorer(play.text);
   const at = play.clock ? `${play.clock} ` : '';
+
+  // Neutral viewer (no favorite team picked): describe events by the team that
+  // performed them, with no 我方/对方 emotion. (Issue #1)
+  if (!rooting) return neutralKeyEvent(play, myTeam, oppTeam, isMyTeam, scoreStr, type, scorer, at);
 
   // ---- Goals ----
   if (play.scoringPlay || /goal/.test(type)) {
@@ -814,15 +894,83 @@ export function keyEventToGameEvent(
   return null;
 }
 
+// Neutral commentary: the buddy narrates by team name and stays excited about goals
+// for either side, instead of taking a 我方/对方 stance. Used when no favorite is picked.
+export function neutralKeyEvent(
+  play: EspnPlay, myTeam: string, oppTeam: string, isMyTeam: boolean,
+  scoreStr: string, type: string, scorer: string | null, at: string,
+): GameEvent | null {
+  const actor = isMyTeam ? myTeam : oppTeam;   // myTeam==home, oppTeam==away in neutral mode
+  const txt = play.text.toLowerCase();
+  const tag = `${type} ${txt}`;
+
+  // ---- Goals ----
+  if (play.scoringPlay || /goal/.test(type)) {
+    if (/own goal/.test(type)) {
+      return { mood: 'watch', message: `😲 ${at}乌龙球! (${actor}) | ${scoreStr}`, ttl: 6500 };
+    }
+    const how = /penalty/.test(type) ? '点球破门' : /header/.test(type) ? '头球破门' : '进球';
+    return { mood: 'dance', message: `⚽🔥 ${at}${actor} ${how}! ${scorer ? scorer + ' | ' : ''}${scoreStr}`, ttl: 7500 };
+  }
+
+  // ---- Cards ----
+  if (/red card|second yellow/.test(type)) {
+    return { mood: 'watch', message: `🟥 ${at}${actor} 红牌罚下, 少打一人 | ${scoreStr}`, ttl: 6500 };
+  }
+  if (/yellow card/.test(type)) {
+    return { mood: 'watch', message: `🟨 ${at}${actor} 吃到黄牌 | ${scoreStr}`, ttl: 5000 };
+  }
+
+  // ---- Attempts / saves ----
+  if (/shot on target|attempt saved|save/.test(tag)) {
+    return { mood: 'watch', message: `🥅 ${at}${actor} 射正, 门将扑出 | ${scoreStr}`, ttl: 5200 };
+  }
+  if (/shot blocked|blocked/.test(tag)) {
+    return { mood: 'watch', message: `🚧 ${at}${actor} 射门被封堵 | ${scoreStr}`, ttl: 4800 };
+  }
+  if (/shot|attempt|miss|off target/.test(tag)) {
+    return { mood: 'watch', message: `🎯 ${at}${actor} 起脚打门 | ${scoreStr}`, ttl: 4800 };
+  }
+
+  // ---- Set pieces / stoppages ----
+  if (/corner/.test(type)) {
+    return { mood: 'watch', message: `🚩 ${at}${actor} 角球机会 | ${scoreStr}`, ttl: 5000 };
+  }
+  if (/substitution/.test(type)) {
+    return { mood: 'watch', message: `🔁 ${at}${actor} 换人调整 | ${scoreStr}`, ttl: 4800 };
+  }
+  if (/start delay/.test(type)) {
+    return { mood: 'sleep', message: `⏸️ ${at}比赛暂停${/drink/i.test(play.text) ? ', 补水时间' : ''} | ${scoreStr}`, ttl: 5000 };
+  }
+  if (/end delay/.test(type)) {
+    return { mood: 'flag', message: `▶️ ${at}比赛恢复 | ${scoreStr}`, ttl: 4500 };
+  }
+
+  // ---- Fouls / turnovers ----
+  if (/handball/.test(tag)) {
+    return { mood: 'watch', message: `✋ ${at}${actor} 手球 | ${scoreStr}`, ttl: 5000 };
+  }
+  if (/offside/.test(tag)) {
+    return { mood: 'watch', message: `🚩 ${at}${actor} 越位 | ${scoreStr}`, ttl: 4500 };
+  }
+  if (/foul|free kick/.test(tag)) {
+    return { mood: 'watch', message: `💢 ${at}${actor} 犯规 | ${scoreStr}`, ttl: 4800 };
+  }
+  if (/tackle|interception|turnover|dispossess/.test(tag)) {
+    return { mood: 'watch', message: `🦵 ${at}${actor} 完成抢断 | ${scoreStr}`, ttl: 4600 };
+  }
+
+  return null;
+}
+
 // "Goal! Brighton 0, Manchester United 1. Patrick Dorgu (..." -> "Patrick Dorgu"
 function parseScorer(text: string): string | null {
   const m = text.match(/\.\s+([A-ZÀ-Ž][\p{L}'.\-]+(?:\s+[A-ZÀ-Ž][\p{L}'.\-]+){0,3})\s*\(/u);
   return m ? m[1] : null;
 }
 
-async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
-  const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${WC_LEAGUE}/scoreboard`;
-  const json = await httpGetJson(url);
+/** Parse ESPN scoreboard JSON response into typed EspnEvent[]. Shared by current-day and future-date queries. */
+export function parseEspnScoreboardJson(json: any): EspnEvent[] {
   const out: EspnEvent[] = [];
   for (const ev of (json?.events ?? [])) {
     const comp = ev?.competitions?.[0];
@@ -877,6 +1025,110 @@ async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
     });
   }
   return out;
+}
+
+async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
+  const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${WC_LEAGUE}/scoreboard`;
+  const json = await httpGetJson(url);
+  return parseEspnScoreboardJson(json);
+}
+
+/**
+ * Pick the single World Cup match to auto-follow when no favorite team is playing,
+ * so the buddy always shows live match info (Issue #1). Priority:
+ *   1. A match in progress right now.
+ *   2. The next upcoming match once it's within 30 min of kickoff — the "switch to the
+ *      next match half an hour before it starts" behavior.
+ *   3. Otherwise the most recently finished match today, so a result lingers on screen
+ *      until the next match is imminent.
+ * Returns null only when there are no matches at all on the board.
+ */
+export function pickAutoFollowMatch(matches: EspnEvent[], now: number = Date.now()): EspnEvent | null {
+  if (!matches.length) return null;
+  const byKickoffAsc = (a: EspnEvent, b: EspnEvent) =>
+    new Date(a.utcDate).getTime() - new Date(b.utcDate).getTime();
+
+  const live = matches.filter(m => m.state === 'in').sort(byKickoffAsc);
+  if (live.length) return live[0];
+
+  const upcoming = matches.filter(m => m.state === 'pre').sort(byKickoffAsc);
+  const finished = matches.filter(m => m.state === 'post').sort(byKickoffAsc);
+  const lastFinished = finished.length ? finished[finished.length - 1] : null;
+  const nextUp = upcoming[0] ?? null;
+
+  if (nextUp) {
+    const msUntil = new Date(nextUp.utcDate).getTime() - now;
+    if (msUntil <= 30 * 60_000) return nextUp;   // imminent → switch to its countdown
+    return lastFinished ?? nextUp;               // else linger on the last result
+  }
+  return lastFinished;
+}
+
+// ---- Next match lookup (for "no game today" announcement) ----
+
+type NextMatchCache = { key: string; event: EspnEvent | null; fetchedAt: number };
+let nextMatchCache: NextMatchCache | null = null;
+const NEXT_MATCH_CACHE_MS = 30 * 60_000; // 30-minute TTL — avoids hammering API on every tick
+
+/**
+ * Find the next upcoming/in-progress match for any of the given favorite teams,
+ * searching today + 7 future days. Results are cached for 30 minutes.
+ */
+async function fetchNextMatchForTeam(fav: string[]): Promise<EspnEvent | null> {
+  const cacheKey = [...fav].sort().join(',');
+  if (
+    nextMatchCache &&
+    nextMatchCache.key === cacheKey &&
+    Date.now() - nextMatchCache.fetchedAt < NEXT_MATCH_CACHE_MS
+  ) {
+    return nextMatchCache.event;
+  }
+
+  const now = new Date();
+  for (let d = 0; d <= 7; d++) {
+    const date = new Date(now);
+    date.setUTCDate(date.getUTCDate() + d);
+    const yyyymmdd = date.toISOString().slice(0, 10).replace(/-/g, '');
+    try {
+      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${WC_LEAGUE}/scoreboard?dates=${yyyymmdd}`;
+      const json = await httpGetJson(url);
+      const events = parseEspnScoreboardJson(json);
+      // Take the first scheduled/in-progress match for any fav team
+      const found = events.find(m =>
+        (m.state === 'pre' || m.state === 'in') &&
+        fav.some(f => teamMatches(m.home, f) || teamMatches(m.away, f))
+      );
+      if (found) {
+        nextMatchCache = { key: cacheKey, event: found, fetchedAt: Date.now() };
+        return found;
+      }
+    } catch {
+      // Silently skip — network error on one day shouldn't block the rest
+    }
+  }
+
+  nextMatchCache = { key: cacheKey, event: null, fetchedAt: Date.now() };
+  return null;
+}
+
+/** Format a UTC ISO date string into a human-readable local time string (Chinese locale). */
+function formatMatchTime(utcDate: string): string {
+  if (!utcDate) return '';
+  try {
+    const d = new Date(utcDate);
+    const now = new Date();
+    const todayStr = now.toLocaleDateString('zh-CN');
+    const matchStr = d.toLocaleDateString('zh-CN');
+    const timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    if (todayStr === matchStr) return `今天 ${timeStr}`;
+    // Check tomorrow
+    const tomorrow = new Date(now);
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    if (tomorrow.toLocaleDateString('zh-CN') === matchStr) return `明天 ${timeStr}`;
+    return `${matchStr} ${timeStr}`;
+  } catch {
+    return '';
+  }
 }
 
 async function fetchEspnPlays(eventId: string): Promise<EspnPlay[]> {

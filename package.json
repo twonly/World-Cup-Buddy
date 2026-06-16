@@ -1,6 +1,6 @@
 {
   "name": "worldcup-buddy",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "世界杯 Buddy — desktop FIFA World Cup 2026 companion for match day",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && tsc -p electron && cross-env NODE_ENV=development electron .",
     "build": "tsc -p electron && vite build",
-    "test": "npm run build && node --test test/poller-replay.test.cjs test/poller-live-events.test.cjs test/proxy-config.test.cjs && node test/poller-dedup.test.cjs",
+    "test": "npm run build && node --test test/poller-replay.test.cjs test/poller-live-events.test.cjs test/proxy-config.test.cjs test/poller-next-match.test.cjs && node test/poller-dedup.test.cjs",
     "package:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win",
     "package:all": "npm run build && electron-builder --mac --win"

@@ -5,6 +5,7 @@ type Pack = { id: string; name: string; author?: string; builtin?: boolean; fram
 
 export function Settings() {
   const [teams, setTeams] = useState<string[]>([]);
+  const [teamAliases, setTeamAliases] = useState<Record<string, string[]>>({});
   const [favorites, setFavorites] = useState<string[]>([]);
   const [mode, setMode] = useState<'live' | 'replay'>('replay');
   const [search, setSearch] = useState('');
@@ -25,9 +26,10 @@ export function Settings() {
   useEffect(() => {
     const api = (window as any).shrimpAPI;
     (async () => {
-      const [cfg, ts, ps] = await Promise.all([
+      const [cfg, ts, aliases, ps] = await Promise.all([
         api.getConfig(),
         api.listTeams(),
+        api.getTeamAliases ? api.getTeamAliases() : Promise.resolve({}),
         api.listCharacters(),
       ]);
       setFavorites(cfg.favoriteTeams ?? []);
@@ -40,6 +42,7 @@ export function Settings() {
       setProxyUrl(cfg.proxyUrl ?? '');
       setProxyBypass(cfg.proxyBypass ?? '<local>');
       setTeams(ts);
+      setTeamAliases(aliases ?? {});
       setPacks(ps);
     })();
   }, []);
@@ -91,9 +94,15 @@ export function Settings() {
     }
   };
 
-  const filtered = teams.filter(t =>
-    t.toLowerCase().includes(search.trim().toLowerCase())
-  );
+  const filtered = teams.filter(t => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    // Match against English name
+    if (t.toLowerCase().includes(q)) return true;
+    // Match against Chinese/abbr aliases (e.g. "阿根廷" → Argentina)
+    const aliases = teamAliases[t.toLowerCase()] ?? [];
+    return aliases.some(a => a.toLowerCase().includes(q));
+  });
 
   return (
     <div className="settings-stage">
@@ -128,7 +137,7 @@ export function Settings() {
           <button className="link-btn" onClick={refreshPacks}>🔄 刷新</button>
         </div>
         <p className="pack-hint">
-          内置 🇧🇷 巴西公仔 + 48 国国旗头像。也可放球星公仔 / 国家队吉祥物 / 任意 PNG
+          内置多国公仔。也可放球星公仔 / 国家队吉祥物 / 任意 PNG
           到素材文件夹,每个子文件夹一个包(7 张表情图或单张图都行)
         </p>
       </section>

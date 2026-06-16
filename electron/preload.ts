@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('shrimpAPI', {
   getConfig: () => ipcRenderer.invoke('config:get'),
   setConfig: (cfg: any) => ipcRenderer.invoke('config:set', cfg),
   listTeams: () => ipcRenderer.invoke('teams:list'),
+  getTeamAliases: () => ipcRenderer.invoke('teams:aliases'),
   drag: (dx: number, dy: number) => ipcRenderer.invoke('shrimp:drag', dx, dy),
   click: () => ipcRenderer.invoke('shrimp:click'),
   triggerDemo: () => ipcRenderer.invoke('demo:trigger'),
