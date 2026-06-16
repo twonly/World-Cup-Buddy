@@ -2,7 +2,7 @@ import { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, di
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
-import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, getCurrentMatchKeyEvents, setMatchView, type GameEvent, type ScoreState } from './poller';
+import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, getCurrentMatchKeyEvents, stepMatch, resetMatchPin, type GameEvent, type ScoreState } from './poller';
 import { listPacks, ensureCharactersDir, charactersDir, packById, seedBuiltinPacks, DEFAULT_PACK_ID } from './characters';
 import { buildSessionProxyConfig, proxyAuthForInput, type ProxyAuth, type ProxyMode } from './proxy';
 
@@ -77,6 +77,28 @@ const BUBBLE_H = 140;
 let shrimpWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let suppressMoveSave = false;   // true while we programmatically resize the buddy window
+
+// Grow/shrink the buddy window to fit its content (so the key-event panel never covers the
+// buddy and the window auto-fits whether expanded or collapsed). Anchored at the bottom edge
+// so the buddy stays put and the panel expands upward into free screen space.
+function resizeShrimpToContent(contentH: number) {
+  if (!shrimpWindow || !contentH) return;
+  const disp = screen.getDisplayMatching(shrimpWindow.getBounds());
+  const wa = disp.workArea;
+  const [x, y] = shrimpWindow.getPosition();
+  const [w, oldH] = shrimpWindow.getSize();
+  const bottom = y + oldH;
+  const maxH = Math.max(SHRIMP_H, bottom - wa.y);                 // don't run off the top
+  const h = Math.round(Math.max(160, Math.min(contentH, maxH)));
+  if (Math.abs(h - oldH) < 2) return;
+  const newY = Math.max(wa.y, bottom - h);                        // keep the bottom fixed
+  suppressMoveSave = true;
+  shrimpWindow.setResizable(true);
+  shrimpWindow.setBounds({ x, y: newY, width: w, height: h });
+  shrimpWindow.setResizable(false);
+  setTimeout(() => { suppressMoveSave = false; }, 60);
+}
 
 const userDataPath = () => app.getPath('userData');
 const configPath = () => path.join(userDataPath(), 'config.json');
@@ -223,7 +245,7 @@ function createShrimpWindow() {
   });
 
   shrimpWindow.on('moved', () => {
-    if (!shrimpWindow) return;
+    if (!shrimpWindow || suppressMoveSave) return;   // ignore programmatic resizes
     const [px, py] = shrimpWindow.getPosition();
     const cur = loadConfig();
     saveConfig({ ...cur, positionX: px, positionY: py });
@@ -395,7 +417,7 @@ function rebuildTrayMenu() {
   if (!tray) return;
   const cfg = loadConfig();
   const menu = Menu.buildFromTemplate([
-    { label: `⚽ 世界杯 Buddy  ·  ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'}`, enabled: false },
+    { label: `⚽ 世界杯 Buddy v${app.getVersion()}  ·  ${cfg.mode === 'replay' ? 'Replay 模式' : 'Live 模式'}`, enabled: false },
     { type: 'separator' },
     { label: `🙈 显示/隐藏 Buddy（${HOTKEY_LABEL}）`, click: () => toggleShrimp() },
     { label: '⚙️ 设置', click: () => createSettingsWindow() },
@@ -695,7 +717,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('teams:list', async () => getKnownTeams());
   ipcMain.handle('teams:aliases', async () => getTeamAliases());
   ipcMain.handle('score:keyEvents', async () => getCurrentMatchKeyEvents());
-  ipcMain.handle('match:setView', (_e, v: 'auto' | 'live' | 'recent' | 'next') => { setMatchView(v); });
+  ipcMain.handle('match:step', (_e, delta: number) => { stepMatch(Number(delta) || 0); });
+  ipcMain.handle('match:reset', () => { resetMatchPin(); });
+  ipcMain.handle('shrimp:resize', (_e, h: number) => { resizeShrimpToContent(Number(h) || 0); });
   ipcMain.handle('shrimp:drag', (_e, dx: number, dy: number) => {
     if (!shrimpWindow) return;
     const [x, y] = shrimpWindow.getPosition();
@@ -707,7 +731,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('card:save', () => saveDailyCard());
   ipcMain.handle('shrimp:contextMenu', () => {
     const menu = Menu.buildFromTemplate([
-      { label: '⚽ 世界杯 Buddy', enabled: false },
+      { label: `⚽ 世界杯 Buddy v${app.getVersion()}`, enabled: false },
       { type: 'separator' },
       { label: '⚙️ 设置', click: () => createSettingsWindow() },
       { label: '📸 保存今日战报卡片', click: () => saveDailyCard().catch(() => {}) },

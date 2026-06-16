@@ -63,11 +63,11 @@ type ScoreState = {
   myShotsOnTarget?: number;
   oppShotsOnTarget?: number;
   nav?: {
-    showing: 'live' | 'recent' | 'next';
-    view: 'auto' | 'live' | 'recent' | 'next';
-    hasLive: boolean;
-    hasRecent: boolean;
+    index: number;
+    total: number;
+    hasPrev: boolean;
     hasNext: boolean;
+    pinned: boolean;
   };
 };
 
@@ -172,6 +172,26 @@ export function Shrimp() {
   const dragRef = useRef<{ dragging: boolean; lastX: number; lastY: number }>({
     dragging: false, lastX: 0, lastY: 0,
   });
+  const measureRef = useRef<HTMLDivElement>(null);
+  const lastSentH = useRef(0);
+
+  // Auto-fit the window to its content so the key-event panel never covers the buddy and
+  // the window shrinks back when collapsed. The window is bottom-anchored in the main process.
+  useEffect(() => {
+    const el = measureRef.current;
+    if (!el) return;
+    const send = () => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h && Math.abs(h - lastSentH.current) >= 2) {
+        lastSentH.current = h;
+        (window as any).shrimpAPI?.resize?.(h);
+      }
+    };
+    const ro = new ResizeObserver(send);
+    ro.observe(el);
+    send();
+    return () => ro.disconnect();
+  }, []);
 
   // Tick once per second for countdown / clock
   useEffect(() => {
@@ -267,9 +287,8 @@ export function Shrimp() {
     setEventsExpanded(prev => !prev);
   };
 
-  const switchView = (v: 'recent' | 'live' | 'next') => {
-    (window as any).shrimpAPI?.setMatchView?.(v);
-  };
+  const stepMatch = (delta: number) => (window as any).shrimpAPI?.stepMatch?.(delta);
+  const resetMatch = () => (window as any).shrimpAPI?.resetMatch?.();
 
   const customSrc = pack && !pack.builtin ? pack.frames[mood] : undefined;
   const isCustom = !!customSrc;
@@ -297,6 +316,7 @@ export function Shrimp() {
       onContextMenu={onContextMenu}
       title="左键戳一下｜双击告别｜右键菜单"
     >
+      <div className="stage-inner" ref={measureRef}>
       {score && (
         <div className={`score-stack ${eventsExpanded ? 'expanded' : ''}`} onClick={toggleEvents} onDoubleClick={e => e.stopPropagation()}>
           <div className={`score-chip status-${score.status.replace('STATUS_','').toLowerCase()}`}>
@@ -312,20 +332,16 @@ export function Shrimp() {
             <span className="period">{statusBadge(score, now)}</span>
             <span className="score-chevron" aria-hidden>{eventsExpanded ? '▲' : '▼'}</span>
           </div>
-          {score.nav && (Number(score.nav.hasRecent) + Number(score.nav.hasLive) + Number(score.nav.hasNext)) >= 2 && (
+          {score.nav && score.nav.total > 1 && (
             <div className="match-switch" onClick={e => e.stopPropagation()}>
-              {score.nav.hasRecent && (
-                <button className={`switch-pill ${score.nav.showing === 'recent' ? 'active' : ''}`}
-                  onClick={() => switchView('recent')}>⏮ 上一场</button>
-              )}
-              {score.nav.hasLive && (
-                <button className={`switch-pill live ${score.nav.showing === 'live' ? 'active' : ''}`}
-                  onClick={() => switchView('live')}>🔴 直播</button>
-              )}
-              {score.nav.hasNext && (
-                <button className={`switch-pill ${score.nav.showing === 'next' ? 'active' : ''}`}
-                  onClick={() => switchView('next')}>下一场 ⏭</button>
-              )}
+              <button className="switch-pill" disabled={!score.nav.hasPrev}
+                onClick={() => stepMatch(-1)}>⏮ 上一场</button>
+              <button className={`switch-pos ${score.nav.pinned ? 'pinned' : ''}`}
+                title="回到当前" onClick={() => score.nav!.pinned && resetMatch()}>
+                {score.nav.pinned ? `${score.nav.index + 1}/${score.nav.total}` : '● 当前'}
+              </button>
+              <button className="switch-pill" disabled={!score.nav.hasNext}
+                onClick={() => stepMatch(1)}>下一场 ⏭</button>
             </div>
           )}
           {contextLabel && (
@@ -391,6 +407,7 @@ export function Shrimp() {
         )}
       </div>
       <div className="shrimp-label">{MOOD_LABEL[mood]}</div>
+      </div>
     </div>
   );
 }

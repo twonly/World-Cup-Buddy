@@ -25,6 +25,15 @@ html, body, #root {
   position: relative;
 }
 
+/* Natural-height content wrapper — measured to auto-fit the window height so the
+   key-event panel sits above the buddy instead of covering it. */
+.stage-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
 .shrimp-stage:active { cursor: grabbing; }
 
 .shrimp-body {
@@ -152,14 +161,11 @@ html, body, #root {
   opacity: 0.78;
 }
 .score-stack {
-  position: absolute;
-  top: 6px;
-  left: 50%;
-  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  margin-bottom: 6px;
   z-index: 10;
   cursor: pointer;
 }
@@ -204,9 +210,10 @@ html, body, #root {
   color: rgba(255,255,255,0.6);
 }
 
-/* 上一场 / 直播 / 下一场 switcher (neutral auto-follow) */
+/* ⏮ 上一场 / 位置 / 下一场 ⏭ — step through the time-ordered match list */
 .match-switch {
   display: flex;
+  align-items: center;
   gap: 4px;
   pointer-events: auto;
 }
@@ -223,9 +230,21 @@ html, body, #root {
   white-space: nowrap;
   transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
-.switch-pill:hover { border-color: rgba(255,255,255,0.42); color: #fff; }
-.switch-pill.active { color: #0f172a; background: #fde047; border-color: #fde047; }
-.switch-pill.live.active { background: #ff5c4d; border-color: #ff5c4d; color: #fff; }
+.switch-pill:hover:not(:disabled) { border-color: rgba(255,255,255,0.42); color: #fff; }
+.switch-pill:disabled { opacity: 0.32; cursor: default; }
+.switch-pos {
+  font-family: 'Spline Sans Mono', ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  color: #94a3b8;
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  min-width: 34px;
+  text-align: center;
+  white-space: nowrap;
+}
+.switch-pos.pinned { color: #fde047; cursor: pointer; }
 
 /* TV-style center-axis timeline: home (my) on the left, away (opp) on the right. */
 .tl-head {

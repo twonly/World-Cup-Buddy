@@ -446,3 +446,38 @@ test('selectFromSlots: pinned views win, with graceful fallback', () => {
   // recent pinned but unavailable → falls back to live
   assert.equal(poller.selectFromSlots({ live, recent: null, next }, 'recent', NOW).id, 'L');
 });
+
+// ============================================================
+// 8. Time-ordered match timeline — browse by time, independent of favorite team
+// ============================================================
+
+test('buildMatchTimeline: orders recent → live → upcoming and caps the list', () => {
+  const list = [
+    ev({ id: 'po1', state: 'post', utcDate: '2026-06-16T06:00:00Z' }),
+    ev({ id: 'po2', state: 'post', utcDate: '2026-06-16T09:00:00Z' }),
+    ev({ id: 'po3', state: 'post', utcDate: '2026-06-16T12:00:00Z' }),
+    ev({ id: 'liveA', state: 'in', utcDate: '2026-06-16T15:00:00Z' }),
+    ev({ id: 'up1', state: 'pre', utcDate: '2026-06-16T18:00:00Z' }),
+    ev({ id: 'up2', state: 'pre', utcDate: '2026-06-16T21:00:00Z' }),
+  ];
+  const tl = poller.buildMatchTimeline(list, 2, 1);   // last 2 finished + live + next 1
+  assert.deepEqual(tl.map(m => m.id), ['po2', 'po3', 'liveA', 'up1']);
+});
+
+test('autoPickFromTimeline: prefers a live match involving a favorite team', () => {
+  const tl = [
+    ev({ id: 'liveX', state: 'in', home: 'France', away: 'Senegal', utcDate: '2026-06-16T15:00:00Z' }),
+    ev({ id: 'liveBRA', state: 'in', home: 'Brazil', away: 'Spain', utcDate: '2026-06-16T15:00:00Z' }),
+  ];
+  assert.equal(poller.autoPickFromTimeline(tl, ['brazil'], NOW).id, 'liveBRA');
+  // no fav match live → first live
+  assert.equal(poller.autoPickFromTimeline(tl, ['japan'], NOW).id, 'liveX');
+});
+
+test('autoPickFromTimeline: no live → lingers on last result when next is far off', () => {
+  const tl = [
+    ev({ id: 'R', state: 'post', utcDate: '2026-06-16T09:00:00Z' }),
+    ev({ id: 'N', state: 'pre', utcDate: new Date(NOW + 5 * 60 * MIN).toISOString() }),
+  ];
+  assert.equal(poller.autoPickFromTimeline(tl, [], NOW).id, 'R');
+});

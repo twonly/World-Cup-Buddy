@@ -48,17 +48,18 @@ export type ScoreState = {
   oppCorners?: number;
   myFouls?: number;
   oppFouls?: number;
-  nav?: MatchNav;                   // neutral auto-follow: lets the user switch 上一场/直播/下一场
+  nav?: MatchNav;                   // position in the time-ordered match list + prev/next availability
 };
 
-// Which slot the scoreboard is showing and which others are available, so the renderer
-// can offer a 上一场 / 直播 / 下一场 switcher. Only set in neutral auto-follow mode.
+// The buddy always browses a time-ordered list of matches (recent → live → upcoming),
+// independent of the favorite team. nav tells the renderer where we are in that list so
+// it can offer ⏮ 上一场 / 下一场 ⏭ stepping and a "回到当前" reset.
 export type MatchNav = {
-  showing: 'live' | 'recent' | 'next';
-  view: 'auto' | 'live' | 'recent' | 'next';
-  hasLive: boolean;
-  hasRecent: boolean;
+  index: number;     // 0-based position in the timeline
+  total: number;
+  hasPrev: boolean;
   hasNext: boolean;
+  pinned: boolean;   // true when the user has stepped away from the auto default
 };
 let currentScore: ScoreState | null = null;
 let currentPossession: number[] = [];
@@ -279,8 +280,7 @@ export function setFavoriteTeams(teams: string[]) {
   lastEventAt = new Map();
   possessionHistory = new Map();
   currentPossession = [];
-  matchView = 'auto';
-  lastSlotSig = '';
+  pinnedMatchId = null;
   matchWindowCache = null;
   pendingEmits.forEach(t => clearTimeout(t));
   pendingEmits = [];
@@ -288,15 +288,32 @@ export function setFavoriteTeams(teams: string[]) {
   setTimeout(() => tick().catch(() => {}), 800);
 }
 
-// Neutral auto-follow: which match the user is looking at. 'auto' = smart default
-// (live > last result until ~30 min before the next kickoff > next). The renderer can
-// pin it to a specific slot via the 上一场/直播/下一场 switcher.
-let matchView: 'auto' | 'live' | 'recent' | 'next' = 'auto';
-let lastSlotSig = '';
-export function getMatchView(): string { return matchView; }
-export function setMatchView(v: 'auto' | 'live' | 'recent' | 'next'): void {
-  matchView = v;
+// Match browsing: the displayed match is the auto default unless the user has pinned one
+// by stepping ⏮/⏭ through the timeline. pinnedMatchId anchors to a match id (stable across
+// window refreshes); it auto-clears when that match drops off the timeline.
+let pinnedMatchId: string | null = null;
+let lastTimeline: EspnEvent[] = [];
+let lastDisplayedId: string | null = null;
+
+/** Step the displayed match earlier (-1) or later (+1) along the time-ordered timeline. */
+export function stepMatch(delta: number): void {
+  if (!lastTimeline.length) return;
+  const fromId = lastDisplayedId ?? autoPickFromTimeline(lastTimeline, favLower(), Date.now())?.id;
+  const cur = lastTimeline.findIndex(m => m.id === fromId);
+  const base = cur >= 0 ? cur : 0;
+  const next = Math.max(0, Math.min(lastTimeline.length - 1, base + Math.sign(delta)));
+  pinnedMatchId = lastTimeline[next].id;
   setTimeout(() => tick().catch(() => {}), 50);
+}
+
+/** Drop any manual pin and return to the auto default (current/live match). */
+export function resetMatchPin(): void {
+  pinnedMatchId = null;
+  setTimeout(() => tick().catch(() => {}), 50);
+}
+
+function favLower(): string[] {
+  return currentOptions?.favoriteTeams.map(t => t.toLowerCase()) ?? [];
 }
 
 export function startPoller(opts: PollerOptions) {
@@ -545,67 +562,49 @@ async function tickLive() {
     return;
   }
 
-  const relevant = matches.filter(m =>
-    fav.some(f => teamMatches(m.home, f) || teamMatches(m.away, f))
-  );
+  // Build a time-ordered list of matches (recent → live → upcoming) from a multi-day
+  // window — independent of the favorite team, so the schedule/results are browsable by
+  // time and never gated by which team you picked.
+  let windowEvents = matches;
+  try {
+    const w = await fetchMatchWindow();
+    const byId = new Map(w.map(e => [e.id, e]));
+    for (const m of matches) byId.set(m.id, m);   // today's fresh scoreboard wins (live state)
+    windowEvents = [...byId.values()];
+  } catch { /* fall back to today only */ }
 
-  // Decide which match(es) to follow (Issue #1):
-  //  - Favorite team playing today → follow those, with partisan 我方/对方 commentary.
-  //  - Otherwise auto-follow the single best World Cup match (live now, or the next one
-  //    once it's within 30 min of kickoff), so the user always sees live match info
-  //    even without picking a team.
-  let followed: EspnEvent[];
-  let rooting: boolean;
-  let nav: MatchNav | undefined;
-  if (relevant.length > 0) {
-    followed = relevant;
-    rooting = true;
-  } else {
-    // Assemble live / last-result / next-up across a multi-day window so the user can
-    // always reach the most recent result AND the next fixture, then switch between them.
-    let windowEvents = matches;
-    try {
-      const w = await fetchMatchWindow();
-      const byId = new Map(w.map(e => [e.id, e]));
-      for (const m of matches) byId.set(m.id, m);   // today's fresh scoreboard wins (live state)
-      windowEvents = [...byId.values()];
-    } catch { /* fall back to today only */ }
-
-    const nowMs = Date.now();
-    const slots = computeMatchSlots(windowEvents);
-
-    // Drop a stale pinned view when the slot set changes (new day / a match kicks off),
-    // so we don't stay stuck on yesterday's pick.
-    const sig = `${slots.live?.id ?? ''}|${slots.recent?.id ?? ''}|${slots.next?.id ?? ''}`;
-    if (sig !== lastSlotSig) { matchView = 'auto'; lastSlotSig = sig; }
-
-    const auto = selectFromSlots(slots, matchView, nowMs);
-    if (!auto) {
-      if (currentScore) { currentScore = null; currentOptions.onScore?.(null); }
-      await announceNoMatch(fav, matches);
-      return;
-    }
-    followed = [auto];
-    rooting = false;
-    const showing: MatchNav['showing'] =
-      auto === slots.live ? 'live' : auto === slots.next ? 'next' : 'recent';
-    nav = {
-      showing,
-      view: matchView,
-      hasLive: !!slots.live,
-      hasRecent: !!slots.recent,
-      hasNext: !!slots.next,
-    };
+  const timeline = buildMatchTimeline(windowEvents);
+  if (!timeline.length) {
+    if (currentScore) { currentScore = null; currentOptions.onScore?.(null); }
+    await announceNoMatch(fav, matches);
+    return;
   }
 
-  // myIsHome: partisan mode follows the favorite team's side; neutral mode treats home as "my".
+  // Drop a stale pin if the pinned match has dropped off the timeline.
+  if (pinnedMatchId && !timeline.some(m => m.id === pinnedMatchId)) pinnedMatchId = null;
+
+  const displayed =
+    (pinnedMatchId ? timeline.find(m => m.id === pinnedMatchId) : null)
+    ?? autoPickFromTimeline(timeline, fav, Date.now());
+  lastTimeline = timeline;
+  lastDisplayedId = displayed.id;
+
+  const idx = timeline.findIndex(m => m.id === displayed.id);
+  const nav: MatchNav = {
+    index: idx,
+    total: timeline.length,
+    hasPrev: idx > 0,
+    hasNext: idx < timeline.length - 1,
+    pinned: pinnedMatchId !== null,
+  };
+
+  // Partisan 我方/对方 commentary only when the displayed match involves a favorite team;
+  // otherwise neutral, team-named commentary.
+  const rooting = fav.some(f => teamMatches(displayed.home, f) || teamMatches(displayed.away, f));
   const myHomeOf = (m: EspnEvent) => rooting ? fav.some(f => teamMatches(m.home, f)) : true;
 
-  // Broadcast the BEST followed match as the persistent scoreboard.
-  // Priority: in-progress > finished today > scheduled today.
-  const priorityRank = (m: EspnEvent) =>
-    m.state === 'in' ? 0 : m.state === 'post' ? 1 : 2;
-  const best = [...followed].sort((a, b) => priorityRank(a) - priorityRank(b))[0];
+  const followed = [displayed];
+  const best = displayed;
   if (best) {
     const bestMyHome = myHomeOf(best);
     const myStats = bestMyHome ? best.homeStats : best.awayStats;
@@ -1224,6 +1223,35 @@ export function selectFromSlots(
 export function pickAutoFollowMatch(matches: EspnEvent[], now: number = Date.now()): EspnEvent | null {
   if (!matches.length) return null;
   return selectFromSlots(computeMatchSlots(matches), 'auto', now);
+}
+
+/**
+ * Build the browsable, time-ordered match list: the last few finished results, any live
+ * matches, then the next several fixtures — all sorted by kickoff. Capped so ⏮/⏭ stepping
+ * stays manageable (~last 5 + live + next 6).
+ */
+export function buildMatchTimeline(matches: EspnEvent[], maxPast = 5, maxFuture = 6): EspnEvent[] {
+  const byId = new Map(matches.map(m => [m.id, m]));
+  const uniq = [...byId.values()];
+  const byKickoffAsc = (a: EspnEvent, b: EspnEvent) =>
+    new Date(a.utcDate).getTime() - new Date(b.utcDate).getTime();
+  const finished = uniq.filter(m => m.state === 'post').sort(byKickoffAsc);
+  const live = uniq.filter(m => m.state === 'in').sort(byKickoffAsc);
+  const upcoming = uniq.filter(m => m.state === 'pre').sort(byKickoffAsc);
+  return [...finished.slice(-maxPast), ...live, ...upcoming.slice(0, maxFuture)];
+}
+
+/**
+ * The default displayed match when the user hasn't pinned one: a live match wins (preferring
+ * one that involves a favorite team), otherwise the last result lingers until the next
+ * kickoff is within 30 min, then it switches to the upcoming match.
+ */
+export function autoPickFromTimeline(timeline: EspnEvent[], fav: string[], now: number = Date.now()): EspnEvent {
+  const live = timeline.filter(m => m.state === 'in');
+  if (live.length) {
+    return live.find(m => fav.some(f => teamMatches(m.home, f) || teamMatches(m.away, f))) ?? live[0];
+  }
+  return selectFromSlots(computeMatchSlots(timeline), 'auto', now) ?? timeline[0];
 }
 
 // Multi-day scoreboard window so the LAST result and the NEXT match are both available

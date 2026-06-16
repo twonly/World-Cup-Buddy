@@ -24,7 +24,9 @@ contextBridge.exposeInMainWorld('shrimpAPI', {
   contextMenu: () => ipcRenderer.invoke('shrimp:contextMenu'),
   farewell: () => ipcRenderer.invoke('shrimp:farewell'),
   getKeyEvents: () => ipcRenderer.invoke('score:keyEvents'),
-  setMatchView: (v: string) => ipcRenderer.invoke('match:setView', v),
+  stepMatch: (delta: number) => ipcRenderer.invoke('match:step', delta),
+  resetMatch: () => ipcRenderer.invoke('match:reset'),
+  resize: (h: number) => ipcRenderer.invoke('shrimp:resize', h),
   testProxy: (mode: string, proxyUrl?: string, proxyBypass?: string) => ipcRenderer.invoke('proxy:test', mode, proxyUrl, proxyBypass),
   onEvent: (cb: (ev: ShrimpEvent) => void) => {
     const listener = (_: any, ev: ShrimpEvent) => cb(ev);
