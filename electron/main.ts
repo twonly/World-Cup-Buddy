@@ -2,7 +2,7 @@ import { app, BrowserWindow, Tray, Menu, ipcMain, screen, nativeImage, shell, di
 import { autoUpdater } from 'electron-updater';
 import * as path from 'path';
 import * as fs from 'fs';
-import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, getCurrentMatchKeyEvents, type GameEvent, type ScoreState } from './poller';
+import { startPoller, stopPoller, setFavoriteTeams, testProxyConnectivity, getKnownTeams, getTeamAliases, getLastGameSnapshot, forceTick, fetchInfoBite, getLastRealEventAt, getCurrentScore, getCurrentMatchKeyEvents, setMatchView, type GameEvent, type ScoreState } from './poller';
 import { listPacks, ensureCharactersDir, charactersDir, packById, seedBuiltinPacks, DEFAULT_PACK_ID } from './characters';
 import { buildSessionProxyConfig, proxyAuthForInput, type ProxyAuth, type ProxyMode } from './proxy';
 
@@ -695,6 +695,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('teams:list', async () => getKnownTeams());
   ipcMain.handle('teams:aliases', async () => getTeamAliases());
   ipcMain.handle('score:keyEvents', async () => getCurrentMatchKeyEvents());
+  ipcMain.handle('match:setView', (_e, v: 'auto' | 'live' | 'recent' | 'next') => { setMatchView(v); });
   ipcMain.handle('shrimp:drag', (_e, dx: number, dy: number) => {
     if (!shrimpWindow) return;
     const [x, y] = shrimpWindow.getPosition();

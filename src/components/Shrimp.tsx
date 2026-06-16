@@ -62,6 +62,13 @@ type ScoreState = {
   oppShots?: number;
   myShotsOnTarget?: number;
   oppShotsOnTarget?: number;
+  nav?: {
+    showing: 'live' | 'recent' | 'next';
+    view: 'auto' | 'live' | 'recent' | 'next';
+    hasLive: boolean;
+    hasRecent: boolean;
+    hasNext: boolean;
+  };
 };
 
 function statusBadge(s: ScoreState, now: number): string {
@@ -260,6 +267,10 @@ export function Shrimp() {
     setEventsExpanded(prev => !prev);
   };
 
+  const switchView = (v: 'recent' | 'live' | 'next') => {
+    (window as any).shrimpAPI?.setMatchView?.(v);
+  };
+
   const customSrc = pack && !pack.builtin ? pack.frames[mood] : undefined;
   const isCustom = !!customSrc;
 
@@ -301,6 +312,22 @@ export function Shrimp() {
             <span className="period">{statusBadge(score, now)}</span>
             <span className="score-chevron" aria-hidden>{eventsExpanded ? '▲' : '▼'}</span>
           </div>
+          {score.nav && (Number(score.nav.hasRecent) + Number(score.nav.hasLive) + Number(score.nav.hasNext)) >= 2 && (
+            <div className="match-switch" onClick={e => e.stopPropagation()}>
+              {score.nav.hasRecent && (
+                <button className={`switch-pill ${score.nav.showing === 'recent' ? 'active' : ''}`}
+                  onClick={() => switchView('recent')}>⏮ 上一场</button>
+              )}
+              {score.nav.hasLive && (
+                <button className={`switch-pill live ${score.nav.showing === 'live' ? 'active' : ''}`}
+                  onClick={() => switchView('live')}>🔴 直播</button>
+              )}
+              {score.nav.hasNext && (
+                <button className={`switch-pill ${score.nav.showing === 'next' ? 'active' : ''}`}
+                  onClick={() => switchView('next')}>下一场 ⏭</button>
+              )}
+            </div>
+          )}
           {contextLabel && (
             <div className="series-chip">{contextLabel}</div>
           )}

@@ -204,6 +204,29 @@ html, body, #root {
   color: rgba(255,255,255,0.6);
 }
 
+/* 上一场 / 直播 / 下一场 switcher (neutral auto-follow) */
+.match-switch {
+  display: flex;
+  gap: 4px;
+  pointer-events: auto;
+}
+.switch-pill {
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  color: #cbd5e1;
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(255,255,255,0.16);
+  border-radius: 999px;
+  padding: 2px 9px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.switch-pill:hover { border-color: rgba(255,255,255,0.42); color: #fff; }
+.switch-pill.active { color: #0f172a; background: #fde047; border-color: #fde047; }
+.switch-pill.live.active { background: #ff5c4d; border-color: #ff5c4d; color: #fff; }
+
 /* TV-style center-axis timeline: home (my) on the left, away (opp) on the right. */
 .tl-head {
   display: flex;

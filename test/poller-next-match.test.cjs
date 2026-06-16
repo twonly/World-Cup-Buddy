@@ -400,3 +400,49 @@ test('buildKeyEventsFromPlays: side handles ESPN name variants ("IR Iran" vs "Ir
   const out = poller.buildKeyEventsFromPlays(plays, true, 'Iran', 'New Zealand');
   assert.equal(out[0].side, 'my');
 });
+
+// ============================================================
+// 7. Match slots — see last result AND next match, switch between them
+// ============================================================
+
+test('computeMatchSlots: splits a multi-day window into live / recent / next', () => {
+  const live = ev({ id: 'L', state: 'in', utcDate: '2026-06-16T18:00:00Z' });
+  const p1 = ev({ id: 'P1', state: 'post', utcDate: '2026-06-16T12:00:00Z' });
+  const p2 = ev({ id: 'P2', state: 'post', utcDate: '2026-06-16T15:00:00Z' });
+  const u1 = ev({ id: 'U1', state: 'pre', utcDate: '2026-06-16T21:00:00Z' });
+  const u2 = ev({ id: 'U2', state: 'pre', utcDate: '2026-06-17T18:00:00Z' });
+  const s = poller.computeMatchSlots([p1, u2, live, p2, u1]);
+  assert.equal(s.live.id, 'L');
+  assert.equal(s.recent.id, 'P2');   // most recently finished
+  assert.equal(s.next.id, 'U1');     // soonest upcoming
+});
+
+test('selectFromSlots: auto lingers on the last RESULT when next is far off (the 11h-gap bug)', () => {
+  const recent = ev({ id: 'R', state: 'post', utcDate: '2026-06-16T15:00:00Z' });
+  const next = ev({ id: 'N', state: 'pre', utcDate: new Date(NOW + 11 * 60 * MIN).toISOString() });
+  assert.equal(poller.selectFromSlots({ live: null, recent, next }, 'auto', NOW).id, 'R');
+});
+
+test('selectFromSlots: auto switches to next within 30 min of kickoff', () => {
+  const recent = ev({ id: 'R', state: 'post', utcDate: '2026-06-16T15:00:00Z' });
+  const next = ev({ id: 'N', state: 'pre', utcDate: new Date(NOW + 20 * MIN).toISOString() });
+  assert.equal(poller.selectFromSlots({ live: null, recent, next }, 'auto', NOW).id, 'N');
+});
+
+test('selectFromSlots: a live match wins in auto mode', () => {
+  const live = ev({ id: 'L', state: 'in' });
+  const recent = ev({ id: 'R', state: 'post' });
+  const next = ev({ id: 'N', state: 'pre', utcDate: new Date(NOW + 20 * MIN).toISOString() });
+  assert.equal(poller.selectFromSlots({ live, recent, next }, 'auto', NOW).id, 'L');
+});
+
+test('selectFromSlots: pinned views win, with graceful fallback', () => {
+  const live = ev({ id: 'L', state: 'in' });
+  const recent = ev({ id: 'R', state: 'post' });
+  const next = ev({ id: 'N', state: 'pre' });
+  assert.equal(poller.selectFromSlots({ live, recent, next }, 'recent', NOW).id, 'R');
+  assert.equal(poller.selectFromSlots({ live, recent, next }, 'next', NOW).id, 'N');
+  assert.equal(poller.selectFromSlots({ live, recent, next }, 'live', NOW).id, 'L');
+  // recent pinned but unavailable → falls back to live
+  assert.equal(poller.selectFromSlots({ live, recent: null, next }, 'recent', NOW).id, 'L');
+});

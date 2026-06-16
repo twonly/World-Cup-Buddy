@@ -48,6 +48,17 @@ export type ScoreState = {
   oppCorners?: number;
   myFouls?: number;
   oppFouls?: number;
+  nav?: MatchNav;                   // neutral auto-follow: lets the user switch 上一场/直播/下一场
+};
+
+// Which slot the scoreboard is showing and which others are available, so the renderer
+// can offer a 上一场 / 直播 / 下一场 switcher. Only set in neutral auto-follow mode.
+export type MatchNav = {
+  showing: 'live' | 'recent' | 'next';
+  view: 'auto' | 'live' | 'recent' | 'next';
+  hasLive: boolean;
+  hasRecent: boolean;
+  hasNext: boolean;
 };
 let currentScore: ScoreState | null = null;
 let currentPossession: number[] = [];
@@ -268,10 +279,24 @@ export function setFavoriteTeams(teams: string[]) {
   lastEventAt = new Map();
   possessionHistory = new Map();
   currentPossession = [];
+  matchView = 'auto';
+  lastSlotSig = '';
+  matchWindowCache = null;
   pendingEmits.forEach(t => clearTimeout(t));
   pendingEmits = [];
   if (replayTimer) clearTimeout(replayTimer);
   setTimeout(() => tick().catch(() => {}), 800);
+}
+
+// Neutral auto-follow: which match the user is looking at. 'auto' = smart default
+// (live > last result until ~30 min before the next kickoff > next). The renderer can
+// pin it to a specific slot via the 上一场/直播/下一场 switcher.
+let matchView: 'auto' | 'live' | 'recent' | 'next' = 'auto';
+let lastSlotSig = '';
+export function getMatchView(): string { return matchView; }
+export function setMatchView(v: 'auto' | 'live' | 'recent' | 'next'): void {
+  matchView = v;
+  setTimeout(() => tick().catch(() => {}), 50);
 }
 
 export function startPoller(opts: PollerOptions) {
@@ -531,11 +556,30 @@ async function tickLive() {
   //    even without picking a team.
   let followed: EspnEvent[];
   let rooting: boolean;
+  let nav: MatchNav | undefined;
   if (relevant.length > 0) {
     followed = relevant;
     rooting = true;
   } else {
-    const auto = pickAutoFollowMatch(matches);
+    // Assemble live / last-result / next-up across a multi-day window so the user can
+    // always reach the most recent result AND the next fixture, then switch between them.
+    let windowEvents = matches;
+    try {
+      const w = await fetchMatchWindow();
+      const byId = new Map(w.map(e => [e.id, e]));
+      for (const m of matches) byId.set(m.id, m);   // today's fresh scoreboard wins (live state)
+      windowEvents = [...byId.values()];
+    } catch { /* fall back to today only */ }
+
+    const nowMs = Date.now();
+    const slots = computeMatchSlots(windowEvents);
+
+    // Drop a stale pinned view when the slot set changes (new day / a match kicks off),
+    // so we don't stay stuck on yesterday's pick.
+    const sig = `${slots.live?.id ?? ''}|${slots.recent?.id ?? ''}|${slots.next?.id ?? ''}`;
+    if (sig !== lastSlotSig) { matchView = 'auto'; lastSlotSig = sig; }
+
+    const auto = selectFromSlots(slots, matchView, nowMs);
     if (!auto) {
       if (currentScore) { currentScore = null; currentOptions.onScore?.(null); }
       await announceNoMatch(fav, matches);
@@ -543,6 +587,15 @@ async function tickLive() {
     }
     followed = [auto];
     rooting = false;
+    const showing: MatchNav['showing'] =
+      auto === slots.live ? 'live' : auto === slots.next ? 'next' : 'recent';
+    nav = {
+      showing,
+      view: matchView,
+      hasLive: !!slots.live,
+      hasRecent: !!slots.recent,
+      hasNext: !!slots.next,
+    };
   }
 
   // myIsHome: partisan mode follows the favorite team's side; neutral mode treats home as "my".
@@ -591,6 +644,7 @@ async function tickLive() {
       oppCorners: oppStats.corners,
       myFouls: myStats.fouls,
       oppFouls: oppStats.fouls,
+      nav,
     };
     currentOptions.onScore?.(currentScore);
     if (best.state === 'in') {
@@ -1125,35 +1179,78 @@ async function fetchEspnScoreboard(): Promise<EspnEvent[]> {
   return parseEspnScoreboardJson(json);
 }
 
+export type MatchSlots = { live: EspnEvent | null; recent: EspnEvent | null; next: EspnEvent | null };
+
 /**
- * Pick the single World Cup match to auto-follow when no favorite team is playing,
- * so the buddy always shows live match info (Issue #1). Priority:
- *   1. A match in progress right now.
- *   2. The next upcoming match once it's within 30 min of kickoff — the "switch to the
- *      next match half an hour before it starts" behavior.
- *   3. Otherwise the most recently finished match today, so a result lingers on screen
- *      until the next match is imminent.
- * Returns null only when there are no matches at all on the board.
+ * Split a set of matches into the three slots the neutral auto-follow can show:
+ * the live match, the most recently finished one, and the soonest upcoming one.
  */
-export function pickAutoFollowMatch(matches: EspnEvent[], now: number = Date.now()): EspnEvent | null {
-  if (!matches.length) return null;
+export function computeMatchSlots(matches: EspnEvent[]): MatchSlots {
+  const byId = new Map(matches.map(m => [m.id, m]));
+  const uniq = [...byId.values()];
   const byKickoffAsc = (a: EspnEvent, b: EspnEvent) =>
     new Date(a.utcDate).getTime() - new Date(b.utcDate).getTime();
+  const live = uniq.filter(m => m.state === 'in').sort(byKickoffAsc)[0] ?? null;
+  const finished = uniq.filter(m => m.state === 'post').sort(byKickoffAsc);
+  const recent = finished.length ? finished[finished.length - 1] : null;
+  const next = uniq.filter(m => m.state === 'pre').sort(byKickoffAsc)[0] ?? null;
+  return { live, recent, next };
+}
 
-  const live = matches.filter(m => m.state === 'in').sort(byKickoffAsc);
-  if (live.length) return live[0];
-
-  const upcoming = matches.filter(m => m.state === 'pre').sort(byKickoffAsc);
-  const finished = matches.filter(m => m.state === 'post').sort(byKickoffAsc);
-  const lastFinished = finished.length ? finished[finished.length - 1] : null;
-  const nextUp = upcoming[0] ?? null;
-
-  if (nextUp) {
-    const msUntil = new Date(nextUp.utcDate).getTime() - now;
-    if (msUntil <= 30 * 60_000) return nextUp;   // imminent → switch to its countdown
-    return lastFinished ?? nextUp;               // else linger on the last result
+/**
+ * Resolve which slot to actually show. `auto` is the smart default: a live match wins,
+ * otherwise the last result lingers until the next kickoff is within 30 min, then it
+ * switches to the upcoming match. A pinned view (live/recent/next) always wins if that
+ * slot exists, falling back gracefully when it doesn't.
+ */
+export function selectFromSlots(
+  slots: MatchSlots, view: 'auto' | 'live' | 'recent' | 'next', now: number = Date.now(),
+): EspnEvent | null {
+  const { live, recent, next } = slots;
+  if (view === 'live') return live ?? recent ?? next;
+  if (view === 'recent') return recent ?? live ?? next;
+  if (view === 'next') return next ?? live ?? recent;
+  // auto
+  if (live) return live;
+  if (next) {
+    const msUntil = new Date(next.utcDate).getTime() - now;
+    if (msUntil <= 30 * 60_000) return next;     // imminent → switch to its countdown
+    return recent ?? next;                       // else linger on the last result
   }
-  return lastFinished;
+  return recent ?? next;
+}
+
+/** Back-compat single-pick helper (auto view). */
+export function pickAutoFollowMatch(matches: EspnEvent[], now: number = Date.now()): EspnEvent | null {
+  if (!matches.length) return null;
+  return selectFromSlots(computeMatchSlots(matches), 'auto', now);
+}
+
+// Multi-day scoreboard window so the LAST result and the NEXT match are both available
+// even across day boundaries (ESPN's default /scoreboard only returns the current day,
+// which is why a just-finished match vanishes once the date rolls over). Cached: the
+// window changes slowly; the live tick still merges today's fresh scoreboard on top.
+type MatchWindowCache = { events: EspnEvent[]; fetchedAt: number };
+let matchWindowCache: MatchWindowCache | null = null;
+const MATCH_WINDOW_TTL = 4 * 60_000;
+
+async function fetchMatchWindow(): Promise<EspnEvent[]> {
+  if (matchWindowCache && Date.now() - matchWindowCache.fetchedAt < MATCH_WINDOW_TTL) {
+    return matchWindowCache.events;
+  }
+  const out: EspnEvent[] = [];
+  const now = new Date();
+  for (let d = -1; d <= 3; d++) {
+    const date = new Date(now);
+    date.setUTCDate(date.getUTCDate() + d);
+    const ymd = date.toISOString().slice(0, 10).replace(/-/g, '');
+    try {
+      const url = `https://site.api.espn.com/apis/site/v2/sports/soccer/${WC_LEAGUE}/scoreboard?dates=${ymd}`;
+      out.push(...parseEspnScoreboardJson(await httpGetJson(url)));
+    } catch { /* skip a day on error */ }
+  }
+  matchWindowCache = { events: out, fetchedAt: Date.now() };
+  return out;
 }
 
 // ---- Next match lookup (for "no game today" announcement) ----
