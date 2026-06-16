@@ -20,18 +20,21 @@ html, body, #root {
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  padding-bottom: 8px;
   cursor: grab;
   position: relative;
 }
 
 /* Natural-height content wrapper — measured to auto-fit the window height so the
-   key-event panel sits above the buddy instead of covering it. */
+   key-event panel sits above the buddy instead of covering it.
+   The top/bottom padding lives here (not on .shrimp-stage) so it's part of the
+   measured height: otherwise the bottom gap pushes this box above the window's
+   top edge and clips the score chip's rounded corners + shadow. */
 .stage-inner {
   display: flex;
   flex-direction: column;
   align-items: center;
   width: 100%;
+  padding: 10px 0 8px;
 }
 
 .shrimp-stage:active { cursor: grabbing; }
